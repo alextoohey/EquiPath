@@ -1,848 +1,132 @@
-"""
-Enhanced Streamlit app for EquiPath with LLM-powered chat interface.
-Allows students to create profiles conversationally and get detailed AI explanations.
-"""
+"""Streamlit page integrating the enhanced AI chat assistant."""
+
+import contextlib
+import io
 
 import streamlit as st
-import pandas as pd
-import plotly.express as px
-import json
-import sys
-import os
-import io
-import base64
-from elevenlabs import ElevenLabs
 
-# Add parent directory to path for imports
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from src.user_profile import UserProfile
-from src.scoring import rank_colleges_for_user, choose_weights
-from src.llm_integration import parse_user_text_to_profile, generate_explanations, build_recommendation_summary
-from src.config import get_anthropic_api_key  # Load API key from .env
-from src.cached_data import load_featured_data_with_clusters
-
-# Import Anthropic
-try:
-    from anthropic import Anthropic
-    ANTHROPIC_AVAILABLE = True
-except ImportError:
-    ANTHROPIC_AVAILABLE = False
+from src.enhanced_app_streamlit_chat import (
+    ANTHROPIC_AVAILABLE,
+    display_recommendations,
+    enhanced_chat_collect_profile,
+    get_anthropic_client,
+    load_enhanced_data,
+)
+from src.enhanced_scoring import rank_colleges_for_user
 
 
-def format_currency(value):
-    """Format a value as currency, handling NaN gracefully."""
-    if pd.isna(value) or value == 0:
-        return "Data not available"
-    return f"${value:,.0f}"
+def render_about_section():
+    st.markdown(
+        """
+## About EquiPath Enhanced
 
+EquiPath helps students find colleges that match their unique needs and circumstances.
 
-def format_percentage(value):
-    """Format a value as percentage, handling NaN gracefully."""
-    if pd.isna(value):
-        return "Data not available"
-    return f"{value:.1f}%"
+### What Makes This Enhanced?
 
+**Comprehensive Indices:**
+- 📚 **Support Infrastructure** - Student support services
+- 📖 **Academic Offerings** - Field-specific program strength
+- 🏫 **Environment Fit** - Campus culture and setting
+- Plus ROI, Affordability, Equity, and Access
 
-def get_anthropic_client():
-    """Get Anthropic client if API key is available."""
-    # Get API key from .env (loaded by config module)
-    api_key = get_anthropic_api_key()
+**Voice Support:**
+- 🎤 **Voice Input** - Answer questions by speaking
+- 🔊 **Voice Output** - Hear responses read aloud
+- Powered by ElevenLabs AI
 
-    if api_key and ANTHROPIC_AVAILABLE:
-        return Anthropic(api_key=api_key)
-    return None
+**Equity-Focused:**
+- Race/ethnicity used ONLY for relevant graduation rates and MSI identification
+- Special support for first-gen, student-parents, and nontraditional students
+- Excludes predatory for-profit institutions by default
 
-
-def chat_collect_profile():
-    """Interactive chat interface to collect user profile."""
-
-    st.subheader("💬 Chat with EquiPath")
-
-    # Voice mode toggle for profile chat
-    col1, col2 = st.columns([4, 1])
-    with col1:
-        st.markdown("Tell me about yourself and I'll help you find the perfect colleges!")
-    with col2:
-        if 'profile_use_voice' not in st.session_state:
-            st.session_state.profile_use_voice = False
-        if st.button("🎤 Voice" if not st.session_state.profile_use_voice else "⌨️ Text", use_container_width=True, key="profile_voice_btn"):
-            st.session_state.profile_use_voice = not st.session_state.profile_use_voice
-            # Reset chat when switching modes
-            st.session_state.chat_messages = []
-            st.session_state.chat_step = 0
-            st.session_state.profile_data = {}
-            st.rerun()
-
-    # Initialize session state for chat
-    if 'chat_messages' not in st.session_state:
-        st.session_state.chat_messages = []
-        st.session_state.profile_data = {}
-        st.session_state.chat_step = 0
-
-    # Different question flow based on mode
-    if st.session_state.profile_use_voice:
-        # Voice mode - ask everything at once
-        questions = [
-            """Hi! I'm here to help you find colleges. To save time, tell me everything about yourself in one go:
-
-What's your name, racial or ethnic background, current GPA, annual budget for college, household income level (low, medium, or high), and which state you're from?
-
-Also let me know: Are you a student-parent? Are you a first-generation college student? Do you want only in-state or public schools? What size school do you prefer?
-
-Just tell me everything naturally!"""
-        ]
-    else:
-        # Text mode - ask sequentially
-        questions = [
-            "Hi! I'm here to help you find colleges. What's your name?",
-            "Nice to meet you! How would you describe your racial/ethnic background? (e.g., Black, Hispanic, White, Asian, Native American, Pacific Islander, or Other)",
-            "Are you a student-parent (do you have children)?",
-            "Are you a first-generation college student (neither parent completed a 4-year degree)?",
-            "What's your approximate annual budget for college? (Just a number in dollars, like 20000)",
-            "What's your household income level? (LOW, MEDIUM, or HIGH)",
-            "What's your current GPA on a 4.0 scale?",
-            "Which state are you from? (Enter 2-letter state code like CA, NY, TX, etc.)",
-            "Do you want to only consider colleges in your home state? (yes/no)",
-            "Do you prefer public schools only? (yes/no)",
-            "What school size do you prefer? (Small, Medium, Large, or 'any' if no preference)"
-        ]
-
-    # Display chat history
-    for idx, message in enumerate(st.session_state.chat_messages):
-        with st.chat_message(message["role"]):
-            st.write(message["content"])
-            # Show audio player for assistant messages in voice mode
-            if (message["role"] == "assistant" and
-                "audio" in message and
-                message["audio"] and
-                st.session_state.profile_use_voice):
-                # Autoplay only the last message
-                if idx == len(st.session_state.chat_messages) - 1:
-                    audio_b64 = base64.b64encode(message["audio"]).decode()
-                    audio_html = f"""
-                        <audio autoplay controls>
-                            <source src="data:audio/mpeg;base64,{audio_b64}" type="audio/mpeg">
-                        </audio>
-                    """
-                    st.markdown(audio_html, unsafe_allow_html=True)
-                else:
-                    st.audio(message["audio"], format="audio/mpeg")
-
-    # Show current question
-    if st.session_state.chat_step < len(questions):
-        # Check if we need to show the next question
-        # Count assistant messages - should equal chat_step + 1
-        assistant_msg_count = sum(1 for msg in st.session_state.chat_messages if msg["role"] == "assistant")
-
-        if assistant_msg_count <= st.session_state.chat_step:
-            # Generate audio for question if in voice mode
-            question_audio = None
-            if st.session_state.profile_use_voice:
-                eleven_api_key = os.getenv("ELEVENLABS_API_KEY")
-                if eleven_api_key:
-                    try:
-                        with st.spinner("🔊 Generating voice..."):
-                            eleven_client = ElevenLabs(api_key=eleven_api_key)
-                            audio_generator = eleven_client.text_to_speech.convert(
-                                voice_id="pNInz6obpgDQGcFmaJgB",  # Adam voice
-                                text=questions[st.session_state.chat_step],
-                                model_id="eleven_turbo_v2_5"
-                            )
-                            question_audio = b"".join(audio_generator)
-                    except Exception as e:
-                        st.error(f"TTS error: {e}")
-
-            # Add question to chat history
-            st.session_state.chat_messages.append({
-                "role": "assistant",
-                "content": questions[st.session_state.chat_step],
-                "audio": question_audio
-            })
-            # Rerun to display with audio
-            st.rerun()
-
-        # User input - Voice or Text
-        user_input = None
-
-        # FIRST: Check for pending voice input (from previous rerun)
-        if 'pending_profile_input' in st.session_state and st.session_state.pending_profile_input:
-            user_input = st.session_state.pending_profile_input
-            st.session_state.pending_profile_input = None
-            # Don't show audio input, just process this input
-
-        elif st.session_state.profile_use_voice:
-            # Voice mode - show audio recorder
-            st.markdown("**🎤 Click to start recording, then click stop when done:**")
-            audio_value = st.audio_input("Record your answer", key="profile_audio")
-
-            if audio_value:
-                # Check if this audio was already processed
-                if 'last_profile_audio' not in st.session_state:
-                    st.session_state.last_profile_audio = None
-
-                # Only process if it's new audio
-                if audio_value != st.session_state.last_profile_audio:
-                    st.session_state.last_profile_audio = audio_value
-
-                    with st.spinner("🎧 Transcribing your voice..."):
-                        try:
-                            eleven_api_key = os.getenv("ELEVENLABS_API_KEY")
-                            if not eleven_api_key:
-                                st.error("⚠️ ELEVENLABS_API_KEY not set in .env file")
-                            elif eleven_api_key == "your-api-key-here":
-                                st.error("⚠️ Please set your actual ELEVENLABS_API_KEY in .env file")
-                            else:
-                                # Get audio bytes
-                                audio_bytes = audio_value.getvalue()
-                                st.info(f"🔊 Audio size: {len(audio_bytes)} bytes")
-
-                                if len(audio_bytes) < 100:
-                                    st.error("❌ Audio file is too small - please speak louder or check your microphone")
-                                else:
-                                    # Save to temporary file for debugging
-                                    import tempfile
-                                    with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
-                                        tmp_file.write(audio_bytes)
-                                        tmp_path = tmp_file.name
-
-                                    st.info(f"📁 Saved audio to: {tmp_path}")
-
-                                    eleven_client = ElevenLabs(api_key=eleven_api_key)
-
-                                    # Open the file and pass to ElevenLabs
-                                    with open(tmp_path, 'rb') as audio_file:
-                                        transcript = eleven_client.speech_to_text.convert(
-                                            file=audio_file,
-                                            model_id="scribe_v2"
-                                        )
-                                        transcribed_text = transcript.text
-                                        st.info(f"📝 Raw transcript result: '{transcribed_text}'")
-
-                                    if transcribed_text and transcribed_text.strip():
-                                        # Store in session state and rerun
-                                        st.session_state.pending_profile_input = transcribed_text.strip()
-                                        st.rerun()
-                                    else:
-                                        st.warning("⚠️ Transcription returned empty text - please speak clearly and loudly")
-                        except Exception as e:
-                            st.error(f"❌ Transcription error: {type(e).__name__}: {str(e)}")
-                            import traceback
-                            st.code(traceback.format_exc())
-        else:
-            # Text mode
-            user_input = st.chat_input("Your answer...")
-
-        if user_input:
-            # Add user message
-            st.session_state.chat_messages.append({
-                "role": "user",
-                "content": user_input
-            })
-
-            # Process answer
-            step = st.session_state.chat_step
-
-            # Voice mode - parse everything at once using AI
-            if st.session_state.profile_use_voice and step == 0:
-                with st.spinner("🤖 Understanding your profile..."):
-                    try:
-                        from anthropic import Anthropic
-                        api_key = get_anthropic_api_key()
-
-                        if api_key:
-                            client = Anthropic(api_key=api_key)
-                            response = client.messages.create(
-                                model="claude-3-haiku-20240307",
-                                max_tokens=500,
-                                temperature=0.3,
-                                system="""Extract student profile information from natural language. Return ONLY valid JSON:
-{
-  "name": string,
-  "race": one of ["BLACK", "HISPANIC", "WHITE", "ASIAN", "NATIVE", "PACIFIC", "OTHER"],
-  "is_parent": boolean,
-  "first_gen": boolean,
-  "budget": number,
-  "income_bracket": one of ["LOW", "MEDIUM", "HIGH"],
-  "gpa": number (0.0-4.0),
-  "state": string (2-letter code) or null,
-  "in_state_only": boolean,
-  "public_only": boolean,
-  "school_size_pref": one of ["Small", "Medium", "Large", null]
-}
-
-Use defaults for missing info: race="OTHER", is_parent=false, first_gen=false, budget=25000, income_bracket="MEDIUM", gpa=3.0, in_state_only=false, public_only=false, school_size_pref=null""",
-                                messages=[{"role": "user", "content": user_input}]
-                            )
-
-                            content = response.content[0].text.strip()
-                            # Remove markdown code blocks if present
-                            if content.startswith("```"):
-                                content = content.split("```")[1]
-                                if content.startswith("json"):
-                                    content = content[4:]
-                                content = content.strip()
-
-                            profile_dict = json.loads(content)
-                            st.session_state.profile_data = profile_dict
-
-                            # Add confirmation message with audio
-                            confirmation_msg = "Got it! Here are your results."
-                            confirmation_audio = None
-
-                            # Generate audio for confirmation
-                            eleven_api_key = os.getenv("ELEVENLABS_API_KEY")
-                            if eleven_api_key:
-                                try:
-                                    eleven_client = ElevenLabs(api_key=eleven_api_key)
-                                    audio_generator = eleven_client.text_to_speech.convert(
-                                        voice_id="pNInz6obpgDQGcFmaJgB",
-                                        text=confirmation_msg,
-                                        model_id="eleven_turbo_v2_5"
-                                    )
-                                    confirmation_audio = b"".join(audio_generator)
-                                except:
-                                    pass
-
-                            st.session_state.chat_messages.append({
-                                "role": "assistant",
-                                "content": confirmation_msg,
-                                "audio": confirmation_audio
-                            })
-
-                            # Skip to end
-                            st.session_state.chat_step = 999
-                            st.rerun()
-                        else:
-                            st.error("API key needed for voice mode parsing")
-                    except Exception as e:
-                        st.error(f"Error parsing profile: {e}")
-                        # Fall back to defaults
-                        st.session_state.profile_data = {
-                            'name': 'Student',
-                            'race': 'OTHER',
-                            'is_parent': False,
-                            'first_gen': False,
-                            'budget': 25000,
-                            'income_bracket': 'MEDIUM',
-                            'gpa': 3.0,
-                            'state': None,
-                            'in_state_only': False,
-                            'public_only': False,
-                            'school_size_pref': None
-                        }
-                        st.session_state.chat_step = 999
-                        st.rerun()
-
-            elif step == 0:  # Text mode - Name
-                st.session_state.profile_data['name'] = user_input
-            elif step == 1:  # Race
-                race_map = {
-                    'black': 'BLACK', 'african': 'BLACK',
-                    'hispanic': 'HISPANIC', 'latino': 'HISPANIC', 'latina': 'HISPANIC',
-                    'white': 'WHITE', 'caucasian': 'WHITE',
-                    'asian': 'ASIAN',
-                    'native': 'NATIVE', 'indigenous': 'NATIVE',
-                    'pacific': 'PACIFIC', 'islander': 'PACIFIC'
-                }
-                race = 'OTHER'
-                for key, val in race_map.items():
-                    if key in user_input.lower():
-                        race = val
-                        break
-                st.session_state.profile_data['race'] = race
-            elif step == 2:  # Student-parent
-                st.session_state.profile_data['is_parent'] = 'yes' in user_input.lower() or 'have' in user_input.lower()
-            elif step == 3:  # First-gen
-                st.session_state.profile_data['first_gen'] = 'yes' in user_input.lower() or 'am' in user_input.lower()
-            elif step == 4:  # Budget
-                try:
-                    budget = float(''.join(filter(str.isdigit, user_input)))
-                    st.session_state.profile_data['budget'] = budget
-                except:
-                    st.session_state.profile_data['budget'] = 25000
-            elif step == 5:  # Income
-                income = 'MEDIUM'
-                if 'low' in user_input.lower():
-                    income = 'LOW'
-                elif 'high' in user_input.lower():
-                    income = 'HIGH'
-                st.session_state.profile_data['income_bracket'] = income
-            elif step == 6:  # GPA
-                try:
-                    gpa = float(user_input.replace(',', '.'))
-                    st.session_state.profile_data['gpa'] = min(4.0, max(0.0, gpa))
-                except:
-                    st.session_state.profile_data['gpa'] = 3.0
-            elif step == 7:  # State
-                # Extract state code (2 letters)
-                state_code = ''.join(filter(str.isalpha, user_input.upper()))[:2]
-                if len(state_code) == 2:
-                    st.session_state.profile_data['state'] = state_code
-                else:
-                    st.session_state.profile_data['state'] = None
-            elif step == 8:  # In-state only
-                st.session_state.profile_data['in_state_only'] = 'yes' in user_input.lower() or 'y' == user_input.lower().strip()
-            elif step == 9:  # Public only
-                st.session_state.profile_data['public_only'] = 'yes' in user_input.lower() or 'y' == user_input.lower().strip()
-            elif step == 10:  # School size
-                size_input = user_input.lower()
-                size = None
-                if 'small' in size_input:
-                    size = 'Small'
-                elif 'medium' in size_input:
-                    size = 'Medium'
-                elif 'large' in size_input:
-                    size = 'Large'
-                st.session_state.profile_data['school_size_pref'] = size
-
-            st.session_state.chat_step += 1
-            st.rerun()
-
-    else:
-        # Profile complete!
-        st.success("✅ Profile complete! Let me find your matches...")
-
-        # Create UserProfile
-        try:
-            profile = UserProfile(
-                race=st.session_state.profile_data.get('race', 'OTHER'),
-                is_parent=st.session_state.profile_data.get('is_parent', False),
-                first_gen=st.session_state.profile_data.get('first_gen', False),
-                budget=st.session_state.profile_data.get('budget', 25000),
-                income_bracket=st.session_state.profile_data.get('income_bracket', 'MEDIUM'),
-                gpa=st.session_state.profile_data.get('gpa', 3.0),
-                in_state_only=st.session_state.profile_data.get('in_state_only', False),
-                state=st.session_state.profile_data.get('state'),
-                public_only=st.session_state.profile_data.get('public_only', False),
-                school_size_pref=st.session_state.profile_data.get('school_size_pref')
-            )
-
-            # Save profile to session state for persistence
-            st.session_state.saved_profile = profile
-
-            return profile
-        except Exception as e:
-            st.error(f"Error creating profile: {e}")
-            if st.button("Start Over"):
-                st.session_state.chat_messages = []
-                st.session_state.profile_data = {}
-                st.session_state.chat_step = 0
-                st.rerun()
-            return None
-
-
-def generate_college_summary(row, profile, client):
-    """Generate AI summary for a specific college."""
-    if not client:
-        return None
-
-    college_data = {
-        "name": row.get('Institution Name', 'Unknown'),
-        "state": row.get('State of Institution', 'N/A'),
-        "sector": row.get('Sector of Institution', 'N/A'),
-        "match_score": float(row.get('user_score', 0)),
-        "net_price": float(pd.to_numeric(row.get('Net Price', 0), errors='coerce')),
-        "median_debt": float(pd.to_numeric(row.get('Median Debt of Completers', 0), errors='coerce')),
-        "median_earnings": float(pd.to_numeric(row.get('Median Earnings of Students Working and Not Enrolled 10 Years After Entry', 0), errors='coerce')),
-        "admission_rate": float(pd.to_numeric(row.get('Total Percent of Applicants Admitted', 0), errors='coerce')),
-        "archetype": row.get('cluster_label', 'N/A')
-    }
-
-    prompt = f"""As a college advisor, write a brief 2-3 sentence summary of why {college_data['name']} is a good match for this student:
-
-Student: {profile.race}, {'student-parent' if profile.is_parent else 'non-parent'}, {'first-generation' if profile.first_gen else 'continuing-generation'}, {profile.budget:,.0f} budget, {profile.gpa} GPA
-
-College:
-- Match Score: {college_data['match_score']:.3f}
-- Net Price: {college_data['net_price']:,.0f}
-- Median Earnings (10yr): {college_data['median_earnings']:,.0f}
-- Admission Rate: {college_data['admission_rate']:.1f}%
-- Type: {college_data['archetype']}
-
-Focus on why this specific college fits this specific student's needs. Be encouraging but honest.
-
-IMPORTANT: Write dollar amounts WITHOUT the dollar sign (e.g., "33,000" not "$33,000") to avoid formatting issues."""
-
-    try:
-        response = client.messages.create(
-            model=os.getenv('ANTHROPIC_MODEL', 'claude-3-haiku-20240307'),
-            max_tokens=200,
-            temperature=0.7,
-            system="You are a supportive college advisor focused on equity and student success.",
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
-        )
-        return response.content[0].text
-    except:
-        return None
+**Fully Personalized:**
+- Custom scoring weights based on YOUR priorities
+- Selectivity bucketing (Reach/Target/Safety)
+- Field-specific matching for your intended major
+        """
+    )
 
 
 def main():
-    """Main app function."""
-
     st.set_page_config(
-        page_title="EquiPath - Chat Mode",
+        page_title="EquiPath - Enhanced Chat",
         page_icon="🎓",
-        layout="wide"
+        layout="wide",
     )
 
-    st.title("🎓 EquiPath: AI-Powered College Advising")
+    st.title("🎓 EquiPath: Enhanced AI Chat Assistant")
+    st.markdown(
+        "Build a comprehensive profile through conversation, explore equity-centered recommendations, and ask follow-up questions with voice support."
+    )
 
-    # Check for Anthropic package
     if not ANTHROPIC_AVAILABLE:
         st.error("⚠️ Anthropic package not installed. Install with: pip install anthropic")
         st.stop()
 
-    # Sidebar settings
-    with st.sidebar:
-        st.header("⚙️ Settings")
+    st.sidebar.header("Navigation")
+    mode = st.sidebar.radio(
+        "Choose Mode:",
+        ["Build Profile (Chat)", "Get Recommendations", "About"],
+    )
 
-        # Show saved profile if it exists
-        if 'saved_profile' in st.session_state and st.session_state.saved_profile:
-            with st.expander("👤 Your Saved Profile", expanded=False):
-                prof = st.session_state.saved_profile
-                st.write(f"**Budget:** ${prof.budget:,.0f}")
-                st.write(f"**GPA:** {prof.gpa}")
-                st.write(f"**State:** {prof.state or 'Not specified'}")
-                st.write(f"**In-state only:** {'Yes' if prof.in_state_only else 'No'}")
-                st.write(f"**Public only:** {'Yes' if prof.public_only else 'No'}")
-                if st.button("📝 Edit Profile"):
-                    # Clear to restart profile creation
-                    st.session_state.chat_messages = []
-                    st.session_state.profile_data = {}
-                    st.session_state.chat_step = 0
-                    st.session_state.saved_profile = None
-                    st.rerun()
-
-        mode = st.radio(
-            "Choose Mode:",
-            ["💬 Chat Mode (AI-Powered)", "📋 Manual Form"],
-            index=0
-        )
-
-        if st.button("🔄 Reset / Start Over"):
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
-            st.rerun()
-
-    # Load data (uses shared cached module)
-    with st.spinner("Loading college data..."):
-        df, centroids, cluster_labels = load_featured_data_with_clusters()
+    if st.sidebar.button("🔄 Reset / Start Over"):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
 
     client = get_anthropic_client()
 
-    # Profile collection
-    # Check if we have a saved profile
-    profile = st.session_state.get('saved_profile', None)
+    if mode == "Build Profile (Chat)":
+        enhanced_chat_collect_profile()
+        return
 
-    # If no saved profile, collect one
-    if not profile:
-        if "💬 Chat" in mode:
-            # Chat mode
-            profile = chat_collect_profile()
-        else:
-            # Manual form (simplified version)
-            st.subheader("📋 Manual Profile Entry")
-            with st.form("profile_form"):
-                col1, col2 = st.columns(2)
+    if mode == "About":
+        render_about_section()
+        return
 
-                with col1:
-                    race = st.selectbox("Race/Ethnicity", ["BLACK", "HISPANIC", "WHITE", "ASIAN", "NATIVE", "PACIFIC", "OTHER"])
-                    is_parent = st.checkbox("Student-Parent")
-                    first_gen = st.checkbox("First-Generation")
-                    budget = st.number_input("Annual Budget ($)", min_value=0, value=25000, step=1000)
-                    state_input = st.text_input("Your State (2-letter code)", value="CA", help="e.g., CA, NY, TX")
-                    state = state_input.upper()[:2]  # Limit to 2 characters
+    if "user_profile" not in st.session_state or not st.session_state.get("profile_complete"):
+        st.warning("Please complete your profile first using the chat interface!")
+        return
 
-                with col2:
-                    income = st.selectbox("Income Bracket", ["LOW", "MEDIUM", "HIGH"], index=1)
-                    gpa = st.slider("GPA", 0.0, 4.0, 3.5, 0.1)
-                    in_state_only = st.checkbox("Only show in-state colleges")
-                    public_only = st.checkbox("Only show public schools")
-                    school_size = st.selectbox("Preferred School Size", ["Any", "Small", "Medium", "Large"], index=0)
+    profile = st.session_state.user_profile
 
-                submitted = st.form_submit_button("Find My Matches")
+    with st.spinner("Finding your perfect college matches..."):
+        with contextlib.redirect_stdout(io.StringIO()):
+            colleges_df = load_enhanced_data(earnings_ceiling=profile.earnings_ceiling_match)
+            recommendations = rank_colleges_for_user(colleges_df, profile, top_k=15)
 
-                if submitted:
-                    profile = UserProfile(
-                        race=race,
-                        is_parent=is_parent,
-                        first_gen=first_gen,
-                        budget=budget,
-                        income_bracket=income,
-                        gpa=gpa,
-                        in_state_only=in_state_only,
-                        state=state if state else None,
-                        public_only=public_only,
-                        school_size_pref=school_size if school_size != "Any" else None
-                    )
-                    # Save profile to session state for persistence
-                    st.session_state.saved_profile = profile
+    if len(recommendations) == 0:
+        st.error("❌ No colleges match your criteria.")
+        st.warning(
+            """
+**Try these adjustments:**
+1. Increase your budget or set more flexible affordability priorities.
+2. Remove geographic restrictions by broadening preferred regions or states.
+3. Set environment preferences (size, urbanization, institution type) to “no preference.”
+4. Include more selectivity levels such as reach, target, safety, and open admission schools.
 
-    # Show recommendations if profile is complete
-    if profile:
-        st.divider()
-
-        # Show profile summary for debugging
-        with st.expander("📋 Your Profile Settings"):
-            st.write(f"**State:** {profile.state or 'Not specified'}")
-            st.write(f"**In-state only:** {'Yes' if profile.in_state_only else 'No'}")
-            st.write(f"**Public schools only:** {'Yes' if profile.public_only else 'No'}")
-            st.write(f"**School size preference:** {profile.school_size_pref or 'Any'}")
-            st.write(f"**Budget:** ${profile.budget:,.0f}")
-            st.write(f"**GPA:** {profile.gpa}")
-
-        # Get recommendations
-        with st.spinner("Finding your best matches..."):
-            recommendations = rank_colleges_for_user(df, profile, top_k=10)
-
-        if len(recommendations) == 0:
-            st.error("No colleges match your criteria. Try adjusting your filters.")
-            st.info("💡 Tip: Try unchecking 'in-state only' or 'public only' filters, or increase your budget.")
-        else:
-            # Generate overall summary with AI
-            if client:
-                with st.spinner("Generating personalized insights..."):
-                    summary = build_recommendation_summary(profile, recommendations, top_k=5)
-                    overall_explanation = generate_explanations(summary)
-
-                    st.subheader("🤖 Your Personalized College Guide")
-                    st.markdown(overall_explanation)
-                    st.divider()
-
-            # Show recommendations
-            st.subheader(f"🎯 Your Top {len(recommendations)} Matches")
-
-            # Personalized weights
-            weights = choose_weights(profile)
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("ROI Weight", f"{weights['alpha']:.0%}")
-            col2.metric("Affordability", f"{weights['beta']:.0%}")
-            col3.metric("Equity", f"{weights['gamma']:.0%}")
-            col4.metric("Access", f"{weights['delta']:.0%}")
-
-            st.divider()
-
-            # Display each college
-            for idx, (_, row) in enumerate(recommendations.iterrows(), 1):
-                with st.expander(f"**{idx}. {row.get('Institution Name', 'Unknown')}** - Match Score: {row['user_score']:.3f}"):
-
-                    # Generate AI summary for this college
-                    if client:
-                        with st.spinner("Generating college summary..."):
-                            college_summary = generate_college_summary(row, profile, client)
-                            if college_summary:
-                                st.info(f"💡 **Why this college?** {college_summary}")
-                                st.divider()
-
-                    col_a, col_b = st.columns(2)
-
-                    with col_a:
-                        st.markdown("**📍 Location & Type**")
-                        st.write(f"State: {row.get('State of Institution', 'N/A')}")
-                        st.write(f"Sector: {row.get('Sector of Institution', 'N/A')}")
-                        st.write(f"Archetype: {row.get('cluster_label', 'N/A')}")
-
-                        st.markdown("**💰 Financial**")
-                        net_price = pd.to_numeric(row.get('Net Price', None), errors='coerce')
-                        st.write(f"Net Price: {format_currency(net_price)}")
-                        median_debt = pd.to_numeric(row.get('Median Debt of Completers', None), errors='coerce')
-                        st.write(f"Median Debt: {format_currency(median_debt)}")
-
-                    with col_b:
-                        st.markdown("**📊 Scores**")
-                        st.write(f"Match Score: {row['user_score']:.3f}")
-                        st.write(f"ROI: {row.get('roi_score', 0):.3f}")
-                        st.write(f"Affordability: {row.get('afford_score_std', 0):.3f}")
-                        st.write(f"Equity: {row.get('equity_parity', 0):.3f}")
-
-                        st.markdown("**🎓 Outcomes**")
-                        earnings = pd.to_numeric(row.get('Median Earnings of Students Working and Not Enrolled 10 Years After Entry', None), errors='coerce')
-                        st.write(f"10yr Earnings: {format_currency(earnings)}")
-                        admit = pd.to_numeric(row.get('Total Percent of Applicants Admitted', None), errors='coerce')
-                        st.write(f"Admit Rate: {format_percentage(admit)}")
-
-            # Visualization
-            st.divider()
-            st.subheader("📈 Visual Comparison")
-
-            fig = px.scatter(
-                recommendations.head(10),
-                x='afford_score_std',
-                y='equity_parity',
-                size='roi_score',
-                color='user_score',
-                hover_name='Institution Name',
-                labels={
-                    'afford_score_std': 'Affordability',
-                    'equity_parity': 'Equity',
-                    'user_score': 'Match Score'
-                },
-                title="Affordability vs. Equity"
+**Your current profile:**
+- Budget: ${:,.0f}
+- In-state only: {}
+- Preferred states: {}
+- Institution type preference: {}
+- Urbanization preference: {}
+- Size preference: {}
+- MSI preference: {}
+            """.format(
+                profile.annual_budget,
+                profile.in_state_only,
+                profile.preferred_states if profile.preferred_states else "None",
+                profile.institution_type_pref,
+                profile.urbanization_pref,
+                profile.size_pref,
+                profile.msi_preference,
             )
-            st.plotly_chart(fig, use_container_width=True)
+        )
+        return
 
-            # Add conversational Q&A chatbot
-            st.divider()
-            st.subheader("💬 Ask Questions About Your Colleges")
-
-            # Voice mode toggle
-            col1, col2 = st.columns([4, 1])
-            with col1:
-                st.markdown("Have questions about these schools or want to know about other colleges? Ask me anything!")
-            with col2:
-                if 'use_voice' not in st.session_state:
-                    st.session_state.use_voice = False
-                if st.button("🎤 Voice" if not st.session_state.use_voice else "⌨️ Text", use_container_width=True):
-                    st.session_state.use_voice = not st.session_state.use_voice
-                    st.rerun()
-
-            # Initialize Q&A chat history
-            if 'qa_messages' not in st.session_state:
-                st.session_state.qa_messages = []
-
-            # Display Q&A chat history
-            for idx, msg in enumerate(st.session_state.qa_messages):
-                with st.chat_message(msg["role"]):
-                    st.write(msg["content"])
-                    # Show audio player for assistant messages in voice mode
-                    if (msg["role"] == "assistant" and
-                        "audio" in msg and
-                        msg["audio"] and
-                        st.session_state.use_voice):
-                        # Autoplay only the last message
-                        if idx == len(st.session_state.qa_messages) - 1:
-                            audio_b64 = base64.b64encode(msg["audio"]).decode()
-                            audio_html = f"""
-                                <audio autoplay controls>
-                                    <source src="data:audio/mpeg;base64,{audio_b64}" type="audio/mpeg">
-                                </audio>
-                            """
-                            st.markdown(audio_html, unsafe_allow_html=True)
-                        else:
-                            st.audio(msg["audio"], format="audio/mpeg")
-
-            # Q&A input
-            if client:
-                user_question = None
-
-                # Check for pending voice input
-                if 'pending_qa_input' in st.session_state and st.session_state.pending_qa_input:
-                    user_question = st.session_state.pending_qa_input
-                    st.session_state.pending_qa_input = None
-
-                # Voice input
-                if st.session_state.use_voice and not user_question:
-                    st.markdown("**🎤 Click to start recording, then click stop when done:**")
-                    audio_value = st.audio_input("Record your question", key="qa_audio")
-
-                    if audio_value:
-                        # Check if this audio was already processed
-                        if 'last_qa_audio' not in st.session_state:
-                            st.session_state.last_qa_audio = None
-
-                        # Only process if it's new audio
-                        if audio_value != st.session_state.last_qa_audio:
-                            st.session_state.last_qa_audio = audio_value
-
-                            with st.spinner("🎧 Transcribing your voice..."):
-                                try:
-                                    eleven_api_key = os.getenv("ELEVENLABS_API_KEY")
-                                    if not eleven_api_key:
-                                        st.error("⚠️ ELEVENLABS_API_KEY not set")
-                                    else:
-                                        eleven_client = ElevenLabs(api_key=eleven_api_key)
-                                        transcript = eleven_client.speech_to_text.convert(
-                                            file=audio_value,
-                                            model_id="scribe_v2"
-                                        )
-                                        transcribed_text = transcript.text
-                                        if transcribed_text:
-                                            st.info(f"📝 You asked: {transcribed_text}")
-                                            # Force immediate processing
-                                            st.session_state.pending_qa_input = transcribed_text
-                                            st.rerun()
-                                except Exception as e:
-                                    st.error(f"Transcription error: {e}")
-                elif not st.session_state.use_voice and not user_question:
-                    # Text input
-                    user_question = st.chat_input("Ask about colleges, compare schools, or request more information...")
-
-                if user_question:
-                    # Add user message
-                    st.session_state.qa_messages.append({"role": "user", "content": user_question})
-
-                    # Build context with profile and recommendations
-                    context = f"""
-Student Profile:
-- Budget: {profile.budget:,.0f}
-- GPA: {profile.gpa}
-- State: {profile.state or 'Not specified'}
-- Preferences: {'In-state only, ' if profile.in_state_only else ''}{'Public only, ' if profile.public_only else ''}{profile.school_size_pref or 'Any size'}
-
-Recommended Colleges:
-{chr(10).join([f"{i+1}. {row['Institution Name']} (State: {row.get('State of Institution', 'N/A')}, Net Price: {format_currency(pd.to_numeric(row.get('Net Price', 0), errors='coerce'))}, Match Score: {row['user_score']:.3f})" for i, (_, row) in enumerate(recommendations.head(10).iterrows())])}
-
-Full Dataset Available: {len(df)} colleges across all states
-"""
-
-                    # Generate AI response
-                    with st.spinner("Thinking..."):
-                        try:
-                            response = client.messages.create(
-                                model=os.getenv('ANTHROPIC_MODEL', 'claude-3-haiku-20240307'),
-                                max_tokens=800,
-                                temperature=0.7,
-                                system="""You are a knowledgeable college advisor helping students explore their college options.
-You have access to the student's profile and their recommended colleges, as well as a database of colleges.
-
-Answer questions about:
-- The recommended colleges (provide specifics from the data)
-- Comparisons between schools
-- Other colleges the student might be interested in
-- College search strategies and next steps
-
-Be conversational, supportive, and informative. Use the context provided to give specific answers.
-When mentioning dollar amounts, write them WITHOUT the dollar sign to avoid formatting issues.""",
-                                messages=[
-                                    {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {user_question}"}
-                                ]
-                            )
-
-                            ai_response = response.content[0].text
-
-                            # Generate audio if in voice mode
-                            response_audio = None
-                            if st.session_state.use_voice:
-                                eleven_api_key = os.getenv("ELEVENLABS_API_KEY")
-                                if eleven_api_key:
-                                    try:
-                                        with st.spinner("🔊 Generating voice response..."):
-                                            eleven_client = ElevenLabs(api_key=eleven_api_key)
-                                            audio_generator = eleven_client.text_to_speech.convert(
-                                                voice_id="pNInz6obpgDQGcFmaJgB",  # Adam voice
-                                                text=ai_response,
-                                                model_id="eleven_turbo_v2_5"
-                                            )
-                                            response_audio = b"".join(audio_generator)
-                                    except Exception as e:
-                                        st.error(f"TTS error: {e}")
-
-                            st.session_state.qa_messages.append({
-                                "role": "assistant",
-                                "content": ai_response,
-                                "audio": response_audio
-                            })
-
-                            # Trigger rerun to show the message with audio
-                            st.rerun()
-
-                        except Exception as e:
-                            st.error(f"Error generating response: {str(e)}")
-            else:
-                st.info("💡 Chat requires an API key. Add your Anthropic API key to enable this feature.")
+    display_recommendations(recommendations, profile, colleges_df, client)
 
 
 if __name__ == "__main__":

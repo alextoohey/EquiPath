@@ -1,11 +1,12 @@
 """
-Enhanced Streamlit Chat App for EquiPath
+Enhanced Streamlit Chat App for EquiPath with Voice Support
 
 Comprehensive conversational interface with:
 - Extended profile questions covering all new dimensions
 - Support for enhanced indices (Support, Academic Fit, Environment)
 - LLM-powered explanations using all available features
 - Filter options and customizable weights
+- Voice input/output using ElevenLabs
 """
 
 import streamlit as st
@@ -16,6 +17,8 @@ import sys
 import os
 import io
 import contextlib
+import base64
+import re
 
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -24,6 +27,13 @@ from src.enhanced_feature_engineering import build_enhanced_featured_college_df
 from src.enhanced_user_profile import EnhancedUserProfile
 from src.enhanced_scoring import rank_colleges_for_user, get_personalized_weights
 from src.config import get_anthropic_api_key
+
+# Import ElevenLabs for voice
+try:
+    from elevenlabs import ElevenLabs
+    ELEVENLABS_AVAILABLE = True
+except ImportError:
+    ELEVENLABS_AVAILABLE = False
 
 # Import Anthropic
 try:
@@ -105,13 +115,209 @@ def get_anthropic_client():
     return None
 
 
+def generate_audio(text):
+    """Generate audio from text using ElevenLabs."""
+    if not ELEVENLABS_AVAILABLE:
+        return None
+
+    eleven_api_key = os.getenv("ELEVENLABS_API_KEY")
+    if not eleven_api_key or eleven_api_key == "your-api-key-here":
+        return None
+
+    try:
+        eleven_client = ElevenLabs(api_key=eleven_api_key)
+        audio_generator = eleven_client.text_to_speech.convert(
+            voice_id="pNInz6obpgDQGcFmaJgB",  # Adam voice
+            text=text,
+            model_id="eleven_turbo_v2_5"
+        )
+        return b"".join(audio_generator)
+    except Exception as e:
+        st.error(f"TTS error: {e}")
+        return None
+
+
+def transcribe_audio(audio_file):
+    """Transcribe audio to text using ElevenLabs."""
+    if not ELEVENLABS_AVAILABLE:
+        return None
+
+    eleven_api_key = os.getenv("ELEVENLABS_API_KEY")
+    if not eleven_api_key or eleven_api_key == "your-api-key-here":
+        return None
+
+    try:
+        eleven_client = ElevenLabs(api_key=eleven_api_key)
+
+        # Handle both file objects and bytes
+        if hasattr(audio_file, 'getvalue'):
+            audio_bytes = audio_file.getvalue()
+            # Save to temporary file
+            import tempfile
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
+                tmp_file.write(audio_bytes)
+                tmp_path = tmp_file.name
+
+            with open(tmp_path, 'rb') as f:
+                transcript = eleven_client.speech_to_text.convert(
+                    file=f,
+                    model_id="scribe_v2"
+                )
+
+            # Clean up temp file
+            os.unlink(tmp_path)
+        else:
+            transcript = eleven_client.speech_to_text.convert(
+                file=audio_file,
+                model_id="scribe_v2"
+            )
+
+        return transcript.text.strip() if transcript.text else None
+    except Exception as e:
+        st.error(f"Transcription error: {e}")
+        return None
+
+
+# ============================================================================
+# NUMBER PARSING HELPERS
+# ============================================================================
+
+_NUMBER_WORDS = {
+    "zero": 0,
+    "oh": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
+    "twenty": 20,
+    "thirty": 30,
+    "forty": 40,
+    "fifty": 50,
+    "sixty": 60,
+    "seventy": 70,
+    "eighty": 80,
+    "ninety": 90,
+}
+
+_SCALE_WORDS = {
+    "hundred": 100,
+    "thousand": 1_000,
+    "million": 1_000_000,
+}
+
+_ALLOWED_NUMBER_TOKENS = set(_NUMBER_WORDS.keys()) | set(_SCALE_WORDS.keys()) | {
+    "and",
+    "point",
+    "dot",
+    "decimal",
+}
+
+
+def _words_to_int(tokens):
+    if not tokens:
+        return 0
+
+    total = 0
+    current = 0
+
+    for token in tokens:
+        if token in _NUMBER_WORDS:
+            current += _NUMBER_WORDS[token]
+        elif token in _SCALE_WORDS:
+            scale = _SCALE_WORDS[token]
+            if current == 0:
+                current = 1
+            current *= scale
+            if scale >= 1000:
+                total += current
+                current = 0
+        elif token == "and":
+            continue
+        else:
+            return None
+
+    return total + current
+
+
+def parse_spoken_number(text: str, allow_float: bool = True):
+    if not text:
+        return None
+
+    # Quick path: direct numeric input
+    try:
+        value = float(text)
+        return value if allow_float else int(value)
+    except ValueError:
+        pass
+
+    # Remove punctuation except decimal point and digits for earlier handling
+    cleaned = text.lower().replace("-", " ")
+    cleaned = re.sub(r"[^a-z\s]", " ", cleaned)
+    tokens = [tok for tok in cleaned.split() if tok]
+
+    tokens = [tok for tok in tokens if tok in _ALLOWED_NUMBER_TOKENS]
+    if not tokens:
+        return None
+
+    # Handle decimal separators
+    for sep in ("point", "dot", "decimal"):
+        if sep in tokens:
+            if not allow_float:
+                return None
+            sep_index = tokens.index(sep)
+            int_tokens = tokens[:sep_index]
+            frac_tokens = tokens[sep_index + 1 :]
+
+            integer_part = _words_to_int(int_tokens) if int_tokens else 0
+            if integer_part is None:
+                return None
+
+            digit_map = {word: str(num) for word, num in _NUMBER_WORDS.items() if num < 10}
+            frac_digits = [digit_map[token] for token in frac_tokens if token in digit_map]
+
+            if len(frac_digits) == len(frac_tokens) and frac_digits:
+                fractional_value = float(f"0.{''.join(frac_digits)}")
+                return integer_part + fractional_value
+
+            fractional_number = _words_to_int(frac_tokens) if frac_tokens else 0
+            if fractional_number is None:
+                return None
+            fractional_number = int(fractional_number)
+            if fractional_number == 0:
+                return float(integer_part)
+
+            divisor = 10 ** len(str(abs(fractional_number)))
+            return integer_part + (fractional_number / divisor)
+
+    number = _words_to_int(tokens)
+    if number is None:
+        return None
+
+    return float(number) if allow_float else int(number)
+
+
 # ============================================================================
 # CHAT INTERFACE
 # ============================================================================
 
 def enhanced_chat_collect_profile():
     """
-    Enhanced interactive chat to collect comprehensive user profile.
+    Enhanced interactive chat to collect comprehensive user profile with voice support.
 
     Covers all EnhancedUserProfile dimensions:
     - Academic background (GPA, test scores, major)
@@ -124,10 +330,25 @@ def enhanced_chat_collect_profile():
     - Scoring weight preferences
     """
     st.subheader("💬 Chat with EquiPath - Enhanced Profile Builder")
-    st.markdown("""
-    I'll ask you a series of questions to understand your needs and preferences.
-    **All questions are optional** - you can skip any question by typing 'skip' or 'pass'.
-    """)
+
+    # Voice mode toggle
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        st.markdown("""
+        I'll ask you a series of questions to understand your needs and preferences.
+        **All questions are optional** - you can skip any question by typing 'skip' or 'pass'.
+        """)
+    with col2:
+        if 'profile_use_voice' not in st.session_state:
+            st.session_state.profile_use_voice = False
+        if st.button("🎤 Voice" if not st.session_state.profile_use_voice else "⌨️ Text",
+                    use_container_width=True, key="profile_voice_btn"):
+            st.session_state.profile_use_voice = not st.session_state.profile_use_voice
+            # Reset chat when switching modes
+            st.session_state.chat_messages = []
+            st.session_state.chat_step = 0
+            st.session_state.profile_data = {}
+            st.rerun()
 
     # Initialize session state
     if 'chat_messages' not in st.session_state:
@@ -289,9 +510,44 @@ def enhanced_chat_collect_profile():
     ]
 
     # Display chat history
-    for message in st.session_state.chat_messages:
+    for idx, message in enumerate(st.session_state.chat_messages):
         with st.chat_message(message["role"]):
             st.write(message["content"])
+            # Show audio player for assistant messages in voice mode
+            if (message["role"] == "assistant" and
+                "audio" in message and
+                message["audio"] and
+                st.session_state.profile_use_voice):
+                if idx == len(st.session_state.chat_messages) - 1:
+                    audio_b64 = base64.b64encode(message["audio"]).decode()
+                    audio_id = f"profile_chat_audio_{idx}"
+                    audio_html = f"""
+                        <audio id="{audio_id}" autoplay>
+                            <source src="data:audio/mpeg;base64,{audio_b64}" type="audio/mpeg">
+                        </audio>
+                        <script>
+                            (function() {{
+                                const audioEl = document.getElementById('{audio_id}');
+                                if (!audioEl) return;
+                                window.__equPathLatestAudio = audioEl;
+                                if (!window.__equPathSpaceHandler) {{
+                                    window.__equPathSpaceHandler = true;
+                                    document.addEventListener('keydown', function(event) {{
+                                        const tag = event.target.tagName;
+                                        if (event.code === 'Space' && tag !== 'INPUT' && tag !== 'TEXTAREA' && !event.target.isContentEditable) {{
+                                            event.preventDefault();
+                                            const target = window.__equPathLatestAudio;
+                                            if (target) {{
+                                                target.currentTime = 0;
+                                                target.play();
+                                            }}
+                                        }}
+                                    }});
+                                }}
+                            }})();
+                        </script>
+                    """
+                    st.markdown(audio_html, unsafe_allow_html=True)
 
     # Check if profile is complete
     if st.session_state.chat_step >= len(questions):
@@ -303,10 +559,19 @@ def enhanced_chat_collect_profile():
                 st.session_state.profile_complete = True
 
                 with st.chat_message("assistant"):
-                    st.success("✅ Profile complete! Click 'Get Recommendations' in the sidebar to see your matches!")
+                    completion_msg = "✅ Profile complete! Click 'Get Recommendations' in the sidebar to see your matches!"
+                    st.success(completion_msg)
+
+                    # Generate audio for completion
+                    if st.session_state.profile_use_voice:
+                        audio = generate_audio(completion_msg)
+                        if audio:
+                            st.audio(audio, format="audio/mpeg", autoplay=True)
+
                     st.session_state.chat_messages.append({
                         "role": "assistant",
-                        "content": "✅ Profile complete! Click 'Get Recommendations' in the sidebar."
+                        "content": completion_msg,
+                        "audio": generate_audio(completion_msg) if st.session_state.profile_use_voice else None
                     })
             except Exception as e:
                 with st.chat_message("assistant"):
@@ -328,15 +593,55 @@ def enhanced_chat_collect_profile():
     assistant_msg_count = sum(1 for msg in st.session_state.chat_messages if msg["role"] == "assistant")
 
     if assistant_msg_count <= st.session_state.chat_step:
-        with st.chat_message("assistant"):
-            st.write(current_q["question"])
-            st.session_state.chat_messages.append({
-                "role": "assistant",
-                "content": current_q["question"]
-            })
+        # Generate audio for question if in voice mode
+        question_audio = None
+        if st.session_state.profile_use_voice:
+            with st.spinner("🔊 Generating voice..."):
+                question_audio = generate_audio(current_q["question"])
 
-    # User input
-    user_input = st.chat_input("Your answer (or type 'skip' to skip optional questions)...")
+        # Add question to chat history
+        st.session_state.chat_messages.append({
+            "role": "assistant",
+            "content": current_q["question"],
+            "audio": question_audio
+        })
+        st.rerun()
+
+    # User input - Voice or Text
+    user_input = None
+
+    # Check for pending voice input (from previous rerun)
+    if 'pending_profile_input' in st.session_state and st.session_state.pending_profile_input:
+        user_input = st.session_state.pending_profile_input
+        st.session_state.pending_profile_input = None
+
+    elif st.session_state.profile_use_voice:
+        # Voice mode - show audio recorder
+        st.markdown("**🎤 Click to start recording, then click stop when done:**")
+        audio_value = st.audio_input("Record your answer", key="profile_audio")
+
+        if audio_value:
+            # Check if this audio was already processed
+            if 'last_profile_audio' not in st.session_state:
+                st.session_state.last_profile_audio = None
+
+            # Only process if it's new audio
+            if audio_value != st.session_state.last_profile_audio:
+                st.session_state.last_profile_audio = audio_value
+
+                with st.spinner("🎧 Transcribing your voice..."):
+                    transcribed_text = transcribe_audio(audio_value)
+
+                    if transcribed_text:
+                        st.info(f"📝 You said: {transcribed_text}")
+                        # Store in session state and rerun
+                        st.session_state.pending_profile_input = transcribed_text
+                        st.rerun()
+                    else:
+                        st.warning("⚠️ Could not transcribe audio - please try again")
+    else:
+        # Text mode
+        user_input = st.chat_input("Your answer (or type 'skip' to skip optional questions)...")
 
     if user_input:
         # Add user message
@@ -358,11 +663,19 @@ def enhanced_chat_collect_profile():
             st.rerun()
         else:
             # Invalid answer, ask again
+            error_msg = "I didn't quite understand that. Could you try again?"
+
+            # Generate audio for error message if in voice mode
+            error_audio = None
+            if st.session_state.profile_use_voice:
+                error_audio = generate_audio(error_msg)
+
             st.session_state.chat_messages.append({
                 "role": "assistant",
-                "content": "I didn't quite understand that. Could you try again?"
+                "content": error_msg,
+                "audio": error_audio
             })
-            st.rerun()  # Rerun to show the error message and keep chat active
+            st.rerun()
 
 
 def process_user_answer(user_input, question_config, profile_data):
@@ -377,14 +690,24 @@ def process_user_answer(user_input, question_config, profile_data):
 
     try:
         if q_type == 'float':
-            # Extract number
             cleaned = ''.join(c for c in user_input if c.isdigit() or c == '.')
-            return float(cleaned)
+            if cleaned:
+                try:
+                    return float(cleaned)
+                except ValueError:
+                    pass
+            spoken_value = parse_spoken_number(user_input, allow_float=True)
+            return spoken_value
 
         elif q_type == 'int':
-            # Extract integer
             cleaned = ''.join(c for c in user_input if c.isdigit())
-            return int(cleaned) if cleaned else None
+            if cleaned:
+                try:
+                    return int(cleaned)
+                except ValueError:
+                    pass
+            spoken_value = parse_spoken_number(user_input, allow_float=False)
+            return spoken_value
 
         elif q_type == 'bool':
             return 'yes' in user_input.lower() or 'y' == user_input.lower()
@@ -407,7 +730,7 @@ def process_user_answer(user_input, question_config, profile_data):
             elif user_lower in ['suburb', 'suburbs', 'near city']:
                 if 'suburban' in [opt.lower() for opt in options]:
                     return 'suburban'
-            elif user_lower in ['small town', 'town']:  # Added 'town' alone
+            elif user_lower in ['small town', 'town']:
                 if 'town' in [opt.lower() for opt in options]:
                     return 'town'
             elif user_lower in ['countryside', 'country', 'remote']:
@@ -657,12 +980,80 @@ def build_profile_from_data(profile_data):
     return profile
 
 
+def generate_college_summary(row, profile, client):
+    """Generate AI summary for a specific college."""
+    if not client:
+        return None
+
+    # Helper function to safely get values
+    def safe_get(series, key, default='N/A'):
+        try:
+            if key in series.index:
+                val = series[key]
+                if pd.isna(val):
+                    return default
+                return val
+            return default
+        except:
+            return default
+
+    # Try different possible column names
+    inst_name = (
+        safe_get(row, 'Institution Name', None) or
+        safe_get(row, 'Institution Name_CR', None) or
+        safe_get(row, 'Institution Name_AG', None) or
+        safe_get(row, 'INSTNM', 'Unknown')
+    )
+
+    state = (
+        safe_get(row, 'State of Institution', None) or
+        safe_get(row, 'State of Institution_CR', None) or
+        safe_get(row, 'State of Institution_AG', 'N/A')
+    )
+
+    college_data = {
+        "name": inst_name,
+        "state": state,
+        "match_score": float(safe_get(row, 'composite_score', 0)),
+        "net_price": float(pd.to_numeric(safe_get(row, 'Net Price', 0), errors='coerce')),
+        "median_debt": float(pd.to_numeric(safe_get(row, 'Median Debt of Completers', 0), errors='coerce')),
+        "median_earnings": float(pd.to_numeric(safe_get(row, 'Median Earnings of Students Working and Not Enrolled 10 Years After Entry', 0), errors='coerce')),
+    }
+
+    prompt = f"""As a college advisor, write a brief 2-3 sentence summary of why {college_data['name']} is a good match for this student:
+
+Student: {profile.race_ethnicity}, {'student-parent' if profile.is_student_parent else 'non-parent'}, {'first-generation' if profile.is_first_gen else 'continuing-generation'}, {profile.annual_budget:,.0f} budget, {profile.gpa} GPA
+
+College:
+- Match Score: {college_data['match_score']:.3f}
+- Net Price: {college_data['net_price']:,.0f}
+- Median Earnings (10yr): {college_data['median_earnings']:,.0f}
+
+Focus on why this specific college fits this specific student's needs. Be encouraging but honest.
+
+IMPORTANT: Write dollar amounts WITHOUT the dollar sign (e.g., "33,000" not "$33,000") to avoid formatting issues."""
+
+    try:
+        response = client.messages.create(
+            model=os.getenv('ANTHROPIC_MODEL', 'claude-3-haiku-20240307'),
+            max_tokens=200,
+            temperature=0.7,
+            system="You are a supportive college advisor focused on equity and student success.",
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
+        return response.content[0].text
+    except:
+        return None
+
+
 # ============================================================================
 # DISPLAY FUNCTIONS
 # ============================================================================
 
-def display_recommendations(recommendations, profile):
-    """Display ranked recommendations with enhanced details."""
+def display_recommendations(recommendations, profile, df, client):
+    """Display ranked recommendations with enhanced details and Q&A chatbot."""
 
     st.header("🎓 Your Personalized College Recommendations")
 
@@ -686,7 +1077,6 @@ def display_recommendations(recommendations, profile):
                 return default
 
         # Try different possible column names for institution name
-        # After merge with suffixes ('_CR', '_AG'), column might be renamed
         inst_name = (
             safe_get(college, 'Institution Name', None) or
             safe_get(college, 'Institution Name_CR', None) or
@@ -698,6 +1088,14 @@ def display_recommendations(recommendations, profile):
         )
 
         with st.expander(f"#{idx}: {inst_name}", expanded=(idx == 1)):
+
+            # Generate AI summary for this college
+            if client:
+                with st.spinner("Generating college summary..."):
+                    college_summary = generate_college_summary(college, profile, client)
+                    if college_summary:
+                        st.info(f"💡 **Why this college?** {college_summary}")
+                        st.divider()
 
             col1, col2, col3 = st.columns(3)
 
@@ -727,24 +1125,20 @@ def display_recommendations(recommendations, profile):
                         safe_get(college, 'State of Institution_AG', 'N/A'))
                 st.write(f"**Location:** {city}, {state}")
 
-                # Size - check actual column names from data
                 size_val = (safe_get(college, 'Institution Size Category_CR', None) or
                            safe_get(college, 'size_category', None) or
                            safe_get(college, 'Institution Size Category', None))
                 st.write(f"**Size:** {format_size(size_val)}")
 
-                # Urbanization - check actual column names from data
                 urban_val = (safe_get(college, 'Degree of Urbanization', None) or
                             safe_get(college, 'urbanization', None))
                 st.write(f"**Urbanization:** {format_urbanization(urban_val)}")
 
             with col2:
-                # Net Price and Affordability Gap columns are from AG dataset
                 net_price = (safe_get(college, 'Net Price', None) or
                            safe_get(college, 'Net Price_AG', None))
                 st.write(f"**Net Price:** {format_currency(net_price)}")
 
-                # Graduation rate - 6 year total (note the duplicate "Bachelor Degree" in column name)
                 grad_rate = (
                     safe_get(college, "Bachelor's Degree Graduation Rate Bachelor Degree Within 6 Years - Total", None) or
                     safe_get(college, "Bachelor's Degree Graduation Rate Bachelor Degree Within 6 Years - Total_CR", None) or
@@ -753,10 +1147,188 @@ def display_recommendations(recommendations, profile):
                 )
                 st.write(f"**Graduation Rate:** {format_percentage(grad_rate)}")
 
-                # Median debt is from CR dataset
                 debt = (safe_get(college, 'Median Debt of Completers', None) or
                        safe_get(college, 'Median Debt of Completers_CR', None))
                 st.write(f"**Median Debt:** {format_currency(debt)}")
+
+    # Visualization
+    st.divider()
+    st.subheader("📈 Visual Comparison")
+
+    fig = px.scatter(
+        recommendations.head(10),
+        x='personalized_affordability',
+        y='personalized_equity',
+        size='personalized_roi',
+        color='composite_score',
+        hover_name='Institution Name' if 'Institution Name' in recommendations.columns else 'INSTNM',
+        labels={
+            'personalized_affordability': 'Affordability',
+            'personalized_equity': 'Equity',
+            'composite_score': 'Match Score',
+            'personalized_roi': 'ROI'
+        },
+        title="Affordability vs. Equity"
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Add conversational Q&A chatbot
+    st.divider()
+    st.subheader("💬 Ask Questions About Your Colleges")
+
+    # Voice mode toggle
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        st.markdown("Have questions about these schools or want to know about other colleges? Ask me anything!")
+    with col2:
+        if 'use_voice_qa' not in st.session_state:
+            st.session_state.use_voice_qa = False
+        if st.button("🎤 Voice" if not st.session_state.use_voice_qa else "⌨️ Text",
+                    use_container_width=True, key="qa_voice_btn"):
+            st.session_state.use_voice_qa = not st.session_state.use_voice_qa
+            st.rerun()
+
+    # Initialize Q&A chat history
+    if 'qa_messages' not in st.session_state:
+        st.session_state.qa_messages = []
+
+    # Display Q&A chat history
+    for idx, msg in enumerate(st.session_state.qa_messages):
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
+            # Show audio player for assistant messages in voice mode
+            if (msg["role"] == "assistant" and
+                "audio" in msg and
+                msg["audio"] and
+                st.session_state.use_voice_qa):
+                if idx == len(st.session_state.qa_messages) - 1:
+                    audio_b64 = base64.b64encode(msg["audio"]).decode()
+                    audio_id = f"qa_chat_audio_{idx}"
+                    audio_html = f"""
+                        <audio id="{audio_id}" autoplay>
+                            <source src="data:audio/mpeg;base64,{audio_b64}" type="audio/mpeg">
+                        </audio>
+                        <script>
+                            (function() {{
+                                const audioEl = document.getElementById('{audio_id}');
+                                if (!audioEl) return;
+                                window.__equPathLatestAudio = audioEl;
+                                if (!window.__equPathSpaceHandler) {{
+                                    window.__equPathSpaceHandler = true;
+                                    document.addEventListener('keydown', function(event) {{
+                                        const tag = event.target.tagName;
+                                        if (event.code === 'Space' && tag !== 'INPUT' && tag !== 'TEXTAREA' && !event.target.isContentEditable) {{
+                                            event.preventDefault();
+                                            const target = window.__equPathLatestAudio;
+                                            if (target) {{
+                                                target.currentTime = 0;
+                                                target.play();
+                                            }}
+                                        }}
+                                    }});
+                                }}
+                            }})();
+                        </script>
+                    """
+                    st.markdown(audio_html, unsafe_allow_html=True)
+
+    # Q&A input
+    if client:
+        user_question = None
+
+        # Check for pending voice input
+        if 'pending_qa_input' in st.session_state and st.session_state.pending_qa_input:
+            user_question = st.session_state.pending_qa_input
+            st.session_state.pending_qa_input = None
+
+        # Voice input
+        if st.session_state.use_voice_qa and not user_question:
+            st.markdown("**🎤 Click to start recording, then click stop when done:**")
+            audio_value = st.audio_input("Record your question", key="qa_audio")
+
+            if audio_value:
+                # Check if this audio was already processed
+                if 'last_qa_audio' not in st.session_state:
+                    st.session_state.last_qa_audio = None
+
+                # Only process if it's new audio
+                if audio_value != st.session_state.last_qa_audio:
+                    st.session_state.last_qa_audio = audio_value
+
+                    with st.spinner("🎧 Transcribing your voice..."):
+                        transcribed_text = transcribe_audio(audio_value)
+                        if transcribed_text:
+                            st.info(f"📝 You asked: {transcribed_text}")
+                            st.session_state.pending_qa_input = transcribed_text
+                            st.rerun()
+                        else:
+                            st.warning("⚠️ Could not transcribe audio - please try again")
+        elif not st.session_state.use_voice_qa and not user_question:
+            # Text input
+            user_question = st.chat_input("Ask about colleges, compare schools, or request more information...")
+
+        if user_question:
+            # Add user message
+            st.session_state.qa_messages.append({"role": "user", "content": user_question})
+
+            # Build context with profile and recommendations
+            context = f"""
+Student Profile:
+- Budget: {profile.annual_budget:,.0f}
+- GPA: {profile.gpa}
+- State: {profile.home_state or 'Not specified'}
+- Preferences: {'In-state only, ' if profile.in_state_only else ''}{'Public only, ' if profile.institution_type_pref == 'public' else ''}{profile.size_pref or 'Any size'}
+
+Recommended Colleges:
+{chr(10).join([f"{i+1}. {row.get('Institution Name', row.get('INSTNM', 'Unknown'))} (State: {row.get('State of Institution', 'N/A')}, Match Score: {row.get('composite_score', 0):.3f})" for i, (_, row) in enumerate(recommendations.head(10).iterrows())])}
+
+Full Dataset Available: {len(df)} colleges across all states
+"""
+
+            # Generate AI response
+            with st.spinner("Thinking..."):
+                try:
+                    response = client.messages.create(
+                        model=os.getenv('ANTHROPIC_MODEL', 'claude-3-haiku-20240307'),
+                        max_tokens=800,
+                        temperature=0.7,
+                        system="""You are a knowledgeable college advisor helping students explore their college options.
+You have access to the student's profile and their recommended colleges, as well as a database of colleges.
+
+Answer questions about:
+- The recommended colleges (provide specifics from the data)
+- Comparisons between schools
+- Other colleges the student might be interested in
+- College search strategies and next steps
+
+Be conversational, supportive, and informative. Use the context provided to give specific answers.
+When mentioning dollar amounts, write them WITHOUT the dollar sign to avoid formatting issues.""",
+                        messages=[
+                            {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {user_question}"}
+                        ]
+                    )
+
+                    ai_response = response.content[0].text
+
+                    # Generate audio if in voice mode
+                    response_audio = None
+                    if st.session_state.use_voice_qa:
+                        with st.spinner("🔊 Generating voice response..."):
+                            response_audio = generate_audio(ai_response)
+
+                    st.session_state.qa_messages.append({
+                        "role": "assistant",
+                        "content": ai_response,
+                        "audio": response_audio
+                    })
+
+                    # Trigger rerun to show the message with audio
+                    st.rerun()
+
+                except Exception as e:
+                    st.error(f"Error generating response: {str(e)}")
+    else:
+        st.info("💡 Chat requires an API key. Add your Anthropic API key to enable this feature.")
 
 
 # ============================================================================
@@ -767,11 +1339,23 @@ def main():
     st.set_page_config(page_title="EquiPath - Enhanced", layout="wide", page_icon="🎓")
 
     st.title("🎓 EquiPath - Your Personalized College Guide")
-    st.markdown("**Enhanced Edition** - Comprehensive equity-aware college matching")
+    st.markdown("**Enhanced Edition** - Comprehensive equity-aware college matching with voice support")
+
+    # Check for required packages
+    if not ANTHROPIC_AVAILABLE:
+        st.error("⚠️ Anthropic package not installed. Install with: pip install anthropic")
+        st.stop()
 
     # Sidebar
     st.sidebar.header("Navigation")
     mode = st.sidebar.radio("Choose Mode:", ["Build Profile (Chat)", "Get Recommendations", "About"])
+
+    if st.sidebar.button("🔄 Reset / Start Over"):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
+
+    client = get_anthropic_client()
 
     if mode == "Build Profile (Chat)":
         enhanced_chat_collect_profile()
@@ -791,7 +1375,7 @@ def main():
                 recommendations = rank_colleges_for_user(colleges_df, profile, top_k=15)
 
         if len(recommendations) > 0:
-            display_recommendations(recommendations, profile)
+            display_recommendations(recommendations, profile, colleges_df, client)
         else:
             st.error("❌ No colleges match your criteria.")
             st.warning("**Try these adjustments:**")
@@ -800,7 +1384,6 @@ def main():
             2. **Remove geographic restrictions** - Try expanding beyond your current region/state preferences
             3. **Set preferences to 'no preference'** - Urbanization, size, institution type
             4. **Include more selectivity levels** - Make sure you're including reach, target, safety, AND open admission schools
-            5. **Check the console output** (if running locally) for details on which filter eliminated colleges
 
             **Your current profile:**
             - Budget: ${:,.0f}
@@ -834,6 +1417,11 @@ def main():
         - 📖 **Academic Offerings** - Field-specific program strength
         - 🏫 **Environment Fit** - Campus culture and setting
         - Plus ROI, Affordability, Equity, and Access
+
+        **Voice Support:**
+        - 🎤 **Voice Input** - Answer questions by speaking
+        - 🔊 **Voice Output** - Hear responses read aloud
+        - Powered by ElevenLabs AI
 
         **Equity-Focused:**
         - Race/ethnicity used ONLY for relevant graduation rates and MSI identification
