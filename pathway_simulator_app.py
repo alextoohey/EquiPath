@@ -20,8 +20,8 @@ Compare costs, debt, and earnings across different college pathways.
 # Load data (cached for performance)
 @st.cache_data
 def load_data():
-    dfa = pd.read_csv("/Users/leozhang/7thDatathon/Affordability Gap Data AY2022-23 2.17.25.xlsx - Affordability_latest_02-17-25 1.csv")
-    dfc = pd.read_csv("/Users/leozhang/7thDatathon/College Results View 2021 Data Dump for Export.xlsx - College Results View 2021 Data .csv")
+    dfa = pd.read_csv("/Users/leozhang/Downloads/Datathon data/Affordability Gap Data AY2022-23 2.17.25.xlsx - Affordability_latest_02-17-25 1.csv")
+    dfc = pd.read_csv("/Users/leozhang/Downloads/Datathon data/College Results View 2021 Data Dump for Export.xlsx - College Results View 2021 Data .csv")
     return dfa, dfc
 
 try:
