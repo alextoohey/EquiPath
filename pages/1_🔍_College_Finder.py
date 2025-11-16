@@ -179,6 +179,10 @@ def main():
             with st.spinner("Finding your best matches..."):
                 recommendations = rank_colleges_for_user(df, profile, top_k=top_k)
 
+            # Save profile and recommendations to session state for map integration
+            st.session_state.saved_profile = profile
+            st.session_state.saved_recommendations = recommendations
+
             if len(recommendations) == 0:
                 st.error("❌ No colleges match your criteria. Try adjusting your filters.")
             else:
@@ -199,6 +203,8 @@ def main():
 
                 # Display recommendations
                 st.subheader(f"🎯 Your Top {len(recommendations)} College Matches")
+
+                st.info("💡 **Tip:** View your recommended schools on the interactive map! Go to the 🗺️ School Map page and toggle to '⭐ My Recommendations'")
 
                 for idx, (_, row) in enumerate(recommendations.iterrows(), 1):
                     with st.expander(f"**{idx}. {row.get('Institution Name', 'Unknown')}** - Match Score: {row['user_score']:.3f}"):

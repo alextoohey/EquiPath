@@ -96,6 +96,10 @@ def main():
             colleges_df = load_enhanced_data(earnings_ceiling=profile.earnings_ceiling_match)
             recommendations = rank_colleges_for_user(colleges_df, profile, top_k=15)
 
+    # Save profile and recommendations to session state for map integration
+    st.session_state.saved_profile = profile
+    st.session_state.saved_recommendations = recommendations
+
     if len(recommendations) == 0:
         st.error("❌ No colleges match your criteria.")
         st.warning(
@@ -125,6 +129,8 @@ def main():
             )
         )
         return
+
+    st.info("💡 **Tip:** View your recommended schools on the interactive map! Go to the 🗺️ School Map page and toggle to '⭐ My Recommendations'")
 
     display_recommendations(recommendations, profile, colleges_df, client)
 
