@@ -88,8 +88,10 @@ class EnhancedUserProfile:
         Preferred region numbers (0-9 based on dataset)
     preferred_states : List[str]
         Specific preferred states (two-letter codes)
+    zip_code : Optional[str]
+        Student's 5-digit zip code for distance-based filtering
     max_distance_from_home : Optional[float]
-        Maximum distance from home in miles (if lat/long available)
+        Maximum distance from home in miles (requires zip_code)
 
     # Environment & Campus Culture Preferences
     urbanization_pref : Optional[str]
@@ -193,7 +195,8 @@ class EnhancedUserProfile:
     in_state_only: bool = False
     preferred_regions: List[int] = field(default_factory=list)
     preferred_states: List[str] = field(default_factory=list)
-    max_distance_from_home: Optional[float] = None
+    zip_code: Optional[str] = None  # 5-digit zip code for distance calculations
+    max_distance_from_home: Optional[float] = None  # Renamed from radius_miles for clarity
 
     # Environment Preferences
     urbanization_pref: Optional[str] = "no_preference"
@@ -250,6 +253,21 @@ class EnhancedUserProfile:
         # Validate state requirement
         if self.in_state_only and not self.home_state:
             raise ValueError("home_state must be provided if in_state_only is True")
+
+        # Validate zip code format (if provided)
+        if self.zip_code is not None:
+            # Remove any non-digit characters and validate length
+            zip_digits = ''.join(filter(str.isdigit, self.zip_code))
+            if len(zip_digits) != 5:
+                raise ValueError(f"zip_code must be a 5-digit string, got {self.zip_code}")
+            self.zip_code = zip_digits  # Normalize to digits only
+
+        # Validate max_distance requirement
+        if self.max_distance_from_home is not None:
+            if not self.zip_code:
+                raise ValueError("zip_code must be provided if max_distance_from_home is set")
+            if self.max_distance_from_home <= 0:
+                raise ValueError(f"max_distance_from_home must be positive, got {self.max_distance_from_home}")
 
         # Validate earnings ceiling
         valid_ceilings = [30000.0, 48000.0, 75000.0, 110000.0, 150000.0]

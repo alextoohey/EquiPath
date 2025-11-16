@@ -15,3 +15,4 @@ streamlit-folium>=0.15.0
 audio-recorder-streamlit>=0.0.10
 elevenlabs>=2.23.0
 soundfile>=0.13.1
+pgeocode>=0.5.0
