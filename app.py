@@ -25,15 +25,17 @@ EquiPath is a comprehensive college advising tool designed to help students find
 
 Our platform offers multiple tools to help you in your college search:
 
-**🔍 College Recommendation Tool**
-- Get personalized college recommendations based on your profile
-- Simple form-based interface
-- Compare colleges based on affordability, ROI, equity, and access
+**✏️ My Profile & Matches**
+- View and edit your profile
+- Get personalized college recommendations
+- Compare colleges based on affordability, ROI, equity, and more
+- Visual comparison tools
 
-**💬 AI-Powered Chat Assistant**
-- Interactive chat interface to build your profile conversationally
+**🤖 AI Chat Assistant**
+- Build your profile through conversation
 - Get AI-generated explanations for recommendations
 - Ask questions about colleges and get personalized insights
+- Voice input and output support
 
 **🗺️ Interactive School Map**
 - Explore postsecondary schools across the United States
@@ -42,12 +44,15 @@ Our platform offers multiple tools to help you in your college search:
 
 ### How EquiPath Works
 
-EquiPath uses a personalized **Student Success & Equity Score** that considers:
+EquiPath uses a comprehensive **personalized scoring system** across 7 dimensions:
 
 - 💰 **Affordability** - Net price and financial accessibility
 - 📈 **ROI** - Earnings potential vs. debt burden
 - ⚖️ **Equity** - Graduation outcomes for students like you
-- 🚪 **Access** - Admission selectivity and fit
+- 🎯 **Support Services** - Student support infrastructure
+- 📚 **Academic Fit** - Program strength in your field
+- 🏫 **Environment** - Campus culture and setting match
+- 🚪 **Access** - Your likelihood of admission (GPA, test scores, selectivity)
 
 ### Get Started
 
@@ -64,14 +69,15 @@ with st.sidebar:
     st.info("""
     Use the pages in the sidebar above to:
 
-    - **College Finder**: Get personalized recommendations
-    - **AI Chat Assistant**: Interactive college search
+    - **My Profile**: Edit your profile and get matches
+    - **AI Chat Assistant**: Build profile through conversation
     - **School Map**: Explore schools geographically
     """)
 
     st.markdown("### 💡 Tips")
     st.markdown("""
-    - Start with the **AI Chat Assistant** for a guided experience
-    - Use the **College Finder** if you prefer quick form-based search
+    - Start with the **AI Chat Assistant** for a conversational experience
+    - Use **My Profile** to edit your profile and get recommendations
+    - Your profile is shared across all pages - build it once, use it everywhere!
     - Explore the **School Map** to see schools in specific regions
     """)

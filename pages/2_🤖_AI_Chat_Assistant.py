@@ -13,6 +13,7 @@ from src.enhanced_app_streamlit_chat import (
     load_enhanced_data,
 )
 from src.enhanced_scoring import rank_colleges_for_user
+from src.shared_profile_state import initialize_shared_profile, get_shared_profile, is_profile_complete, has_minimum_profile
 
 
 def render_about_section():
@@ -64,15 +65,21 @@ def main():
         st.error("⚠️ Anthropic package not installed. Install with: pip install anthropic")
         st.stop()
 
+    # Initialize shared profile state
+    initialize_shared_profile()
+
     st.sidebar.header("Navigation")
     mode = st.sidebar.radio(
         "Choose Mode:",
         ["Build Profile (Chat)", "Get Recommendations", "About"],
     )
 
-    if st.sidebar.button("🔄 Reset / Start Over"):
+    if st.sidebar.button("🔄 Reset Chat & Start Over"):
+        from src.shared_profile_state import reset_shared_profile
+        reset_shared_profile()
         for key in list(st.session_state.keys()):
-            del st.session_state[key]
+            if key not in ['shared_profile', 'shared_profile_data', 'profile_complete']:
+                del st.session_state[key]
         st.rerun()
 
     client = get_anthropic_client()
@@ -85,11 +92,24 @@ def main():
         render_about_section()
         return
 
-    if "user_profile" not in st.session_state or not st.session_state.get("profile_complete"):
-        st.warning("Please complete your profile first using the chat interface!")
+    # Get Recommendations mode
+    # Check for minimum profile data
+    if not has_minimum_profile():
+        st.warning("⚠️ Please answer at least the **GPA** and **Budget** questions in the chat to get recommendations!")
+        st.info("💡 Go to 'Build Profile (Chat)' mode and start answering questions. You can see recommendations as soon as you've provided basic info!")
         return
 
-    profile = st.session_state.user_profile
+    # Build profile from current data (even if not complete)
+    profile = get_shared_profile()
+    if profile is None:
+        st.error("Error loading profile. Please try rebuilding it in the chat.")
+        return
+
+    # Show status
+    if is_profile_complete():
+        st.success("✅ Full profile complete!")
+    else:
+        st.info("ℹ️ Showing recommendations with partial profile. Complete more questions for better matches!")
 
     with st.spinner("Finding your perfect college matches..."):
         with contextlib.redirect_stdout(io.StringIO()):
@@ -103,7 +123,7 @@ def main():
 **Try these adjustments:**
 1. Increase your budget or set more flexible affordability priorities.
 2. Remove geographic restrictions by broadening preferred regions or states.
-3. Set environment preferences (size, urbanization, institution type) to “no preference.”
+3. Set environment preferences (size, urbanization, institution type) to "no preference."
 4. Include more selectivity levels such as reach, target, safety, and open admission schools.
 
 **Your current profile:**

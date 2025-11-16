@@ -140,10 +140,12 @@ def generate_audio(text):
 def transcribe_audio(audio_file):
     """Transcribe audio to text using ElevenLabs."""
     if not ELEVENLABS_AVAILABLE:
+        st.warning("⚠️ ElevenLabs not installed. Voice features are disabled.")
         return None
 
     eleven_api_key = os.getenv("ELEVENLABS_API_KEY")
     if not eleven_api_key or eleven_api_key == "your-api-key-here":
+        st.warning("⚠️ ElevenLabs API key not configured.")
         return None
 
     try:
@@ -174,7 +176,11 @@ def transcribe_audio(audio_file):
 
         return transcript.text.strip() if transcript.text else None
     except Exception as e:
-        st.error(f"Transcription error: {e}")
+        error_msg = str(e)
+        if 'quota_exceeded' in error_msg or '401' in error_msg:
+            st.error("❌ **ElevenLabs quota exceeded** - Your API key has run out of credits. Please switch to text mode or upgrade your ElevenLabs plan.")
+        else:
+            st.error(f"Transcription error: {e}")
         return None
 
 
@@ -348,6 +354,7 @@ def enhanced_chat_collect_profile():
             st.session_state.chat_messages = []
             st.session_state.chat_step = 0
             st.session_state.profile_data = {}
+            st.session_state.question_asked_for_step = -1
             st.rerun()
 
     # Initialize session state
@@ -356,6 +363,10 @@ def enhanced_chat_collect_profile():
         st.session_state.profile_data = {}
         st.session_state.chat_step = 0
         st.session_state.profile_complete = False
+
+    # Initialize question tracking separately to ensure it exists
+    if 'question_asked_for_step' not in st.session_state:
+        st.session_state.question_asked_for_step = -1  # Track which step we've asked a question for
 
     # Enhanced questions flow
     questions = [
@@ -504,7 +515,7 @@ def enhanced_chat_collect_profile():
         # Priorities
         {
             "key": "priorities",
-            "question": "Almost done! What matters most to you? Rank these (or type 'default' for balanced):\n1. Affordability\n2. Support Services\n3. Academic Quality/ROI\n4. Equity/Diversity\n5. Environment Fit\n\nExample: 'Affordability, Support, ROI'",
+            "question": "Almost done! Rank these priorities from most to least important (or type 'default' for balanced):\n1. Affordability (cost and financial aid)\n2. Support Services (academic and non-academic support)\n3. Return on Investment (ROI) - earnings and graduation rates\n4. Equity & Diversity (support for diverse populations)\n5. Academic Fit (programs and rigor)\n6. Campus Environment (size, location, culture)\n7. Admission Likelihood (your chances of getting in)\n\nExample: 'Affordability, ROI, Support, Admission Likelihood'",
             "type": "text"
         }
     ]
@@ -589,10 +600,8 @@ def enhanced_chat_collect_profile():
         st.rerun()
         return
 
-    # Check if we need to show the question
-    assistant_msg_count = sum(1 for msg in st.session_state.chat_messages if msg["role"] == "assistant")
-
-    if assistant_msg_count <= st.session_state.chat_step:
+    # Check if we need to show the question (only once per step)
+    if st.session_state.question_asked_for_step != st.session_state.chat_step:
         # Generate audio for question if in voice mode
         question_audio = None
         if st.session_state.profile_use_voice:
@@ -605,6 +614,7 @@ def enhanced_chat_collect_profile():
             "content": current_q["question"],
             "audio": question_audio
         })
+        st.session_state.question_asked_for_step = st.session_state.chat_step
         st.rerun()
 
     # User input - Voice or Text
@@ -653,17 +663,31 @@ def enhanced_chat_collect_profile():
         # Process answer
         processed_value = process_user_answer(user_input, current_q, st.session_state.profile_data)
 
-        if processed_value is not None or user_input.lower() in ['skip', 'pass']:
+        if processed_value is not None or user_input.lower().strip() in ['skip', 'pass']:
             # Store value
             if processed_value is not None:
                 st.session_state.profile_data[current_q['key']] = processed_value
+
+                # Update shared profile immediately with each answer
+                from src.shared_profile_state import update_profile_from_data
+                update_profile_from_data({current_q['key']: processed_value})
 
             # Move to next question
             st.session_state.chat_step += 1
             st.rerun()
         else:
-            # Invalid answer, ask again
-            error_msg = "I didn't quite understand that. Could you try again?"
+            # Invalid answer, ask again with more helpful message
+            q_type = current_q.get('type', 'text')
+
+            if q_type == 'choice':
+                options_list = ", ".join(current_q.get('options', []))
+                error_msg = f"I didn't quite understand '{user_input}'.\n\n**Please choose from:** {options_list}\n\nOr type 'skip' to skip this question."
+            elif q_type == 'float' or q_type == 'int':
+                error_msg = f"I didn't quite understand '{user_input}'.\n\nPlease enter a **number**, or type 'skip' to skip this question."
+            elif q_type == 'bool':
+                error_msg = f"I didn't quite understand '{user_input}'.\n\nPlease answer **'yes' or 'no'**, or type 'skip' to skip this question."
+            else:
+                error_msg = "I didn't quite understand that. Could you try again, or type 'skip' to skip this question?"
 
             # Generate audio for error message if in voice mode
             error_audio = None
@@ -675,6 +699,9 @@ def enhanced_chat_collect_profile():
                 "content": error_msg,
                 "audio": error_audio
             })
+
+            # Keep showing the same question - don't advance the step
+            # The question won't be re-added because question_asked_for_step already equals chat_step
             st.rerun()
 
 
@@ -722,104 +749,96 @@ def process_user_answer(user_input, question_config, profile_data):
                 if option.lower() == user_lower:
                     return option
 
-            # Special handling for common variations (BEFORE generic matching)
+            # Special handling for common variations
+            # Use IF (not ELIF) so we only check relevant ones based on what options exist
+
             # Urbanization preferences
-            if user_lower in ['city', 'big city', 'urban area']:
-                if 'urban' in [opt.lower() for opt in options]:
-                    return 'urban'
-            elif user_lower in ['suburb', 'suburbs', 'near city']:
-                if 'suburban' in [opt.lower() for opt in options]:
-                    return 'suburban'
-            elif user_lower in ['small town', 'town']:
-                if 'town' in [opt.lower() for opt in options]:
-                    return 'town'
-            elif user_lower in ['countryside', 'country', 'remote']:
-                if 'rural' in [opt.lower() for opt in options]:
-                    return 'rural'
+            if 'urban' in [opt.lower() for opt in options] or 'suburban' in [opt.lower() for opt in options]:
+                if user_lower in ['city', 'big city', 'urban area']:
+                    if 'urban' in [opt.lower() for opt in options]:
+                        return 'urban'
+                elif user_lower in ['suburb', 'suburbs', 'near city']:
+                    if 'suburban' in [opt.lower() for opt in options]:
+                        return 'suburban'
+                elif user_lower in ['small town', 'town']:
+                    if 'town' in [opt.lower() for opt in options]:
+                        return 'town'
+                elif user_lower in ['countryside', 'country', 'remote']:
+                    if 'rural' in [opt.lower() for opt in options]:
+                        return 'rural'
 
             # Size preferences
-            elif user_lower in ['tiny', 'very small']:
-                if 'small' in [opt.lower() for opt in options]:
+            if 'small' in [opt.lower() for opt in options] and 'medium' in [opt.lower() for opt in options]:
+                if user_lower in ['tiny', 'very small']:
                     return 'small'
-            elif user_lower in ['mid-size', 'medium-sized', 'moderate']:
-                if 'medium' in [opt.lower() for opt in options]:
+                elif user_lower in ['mid-size', 'medium-sized', 'moderate']:
                     return 'medium'
-            elif user_lower in ['big', 'huge', 'very large']:
-                if 'large' in [opt.lower() for opt in options]:
+                elif user_lower in ['big', 'huge', 'very large']:
                     return 'large'
 
             # Institution type preferences
-            elif user_lower in ['state', 'state school', 'public university']:
-                if 'public' in [opt.lower() for opt in options]:
+            if 'public' in [opt.lower() for opt in options] or 'private_nonprofit' in [opt.lower() for opt in options]:
+                if user_lower in ['state', 'state school', 'public university']:
                     return 'public'
-            elif user_lower in ['private', 'private school']:
-                if 'private_nonprofit' in [opt.lower() for opt in options]:
+                elif user_lower in ['private', 'private school']:
                     return 'private_nonprofit'
 
             # MSI preferences
-            elif user_lower in ['historically black', 'black college']:
-                if 'hbcu' in [opt.lower() for opt in options]:
+            if 'HBCU' in options or 'HSI' in options:
+                if user_lower in ['historically black', 'black college']:
                     return 'HBCU'
-            elif user_lower in ['hispanic serving', 'latino serving']:
-                if 'hsi' in [opt.lower() for opt in options]:
+                elif user_lower in ['hispanic serving', 'latino serving']:
                     return 'HSI'
-            elif user_lower in ['tribal', 'native american']:
-                if 'tribal' in [opt.lower() for opt in options]:
+                elif user_lower in ['tribal', 'native american']:
                     return 'Tribal'
-            elif user_lower in ['any msi', 'minority serving']:
-                if 'any_msi' in [opt.lower() for opt in options]:
+                elif user_lower in ['any msi', 'minority serving']:
                     return 'any_MSI'
 
             # Major/field preferences
-            elif user_lower in ['science', 'technology', 'engineering', 'math']:
-                if 'stem' in [opt.lower() for opt in options]:
+            if 'STEM' in options or 'Business' in options or 'Health' in options:
+                if user_lower in ['science', 'technology', 'engineering', 'math', 'computer science', 'cs']:
                     return 'STEM'
-            elif user_lower in ['medicine', 'nursing', 'healthcare']:
-                if 'health' in [opt.lower() for opt in options]:
+                elif user_lower in ['business', 'finance', 'marketing', 'management', 'accounting']:
+                    return 'Business'
+                elif user_lower in ['medicine', 'nursing', 'healthcare', 'health']:
                     return 'Health'
-            elif user_lower in ['liberal arts', 'humanities']:
-                if 'arts & humanities' in [opt.lower() for opt in options]:
+                elif user_lower in ['social sciences', 'sociology', 'psychology', 'political science', 'economics']:
+                    return 'Social Sciences'
+                elif user_lower in ['liberal arts', 'humanities', 'arts', 'art', 'arts & humanities']:
                     return 'Arts & Humanities'
-            elif user_lower in ['not sure', 'unsure', 'don\'t know']:
-                if 'undecided' in [opt.lower() for opt in options]:
+                elif user_lower in ['education', 'teaching']:
+                    return 'Education'
+                elif user_lower in ['not sure', 'unsure', 'don\'t know', "i don't know"]:
                     return 'Undecided'
 
             # Race/ethnicity preferences
-            elif user_lower in ['african american', 'black']:
-                if 'black' in [opt.lower() for opt in options]:
+            if 'BLACK' in options or 'HISPANIC' in options or 'ASIAN' in options:
+                if user_lower in ['african american', 'black']:
                     return 'BLACK'
-            elif user_lower in ['latino', 'latina', 'latinx', 'chicano']:
-                if 'hispanic' in [opt.lower() for opt in options]:
+                elif user_lower in ['latino', 'latina', 'latinx', 'chicano', 'hispanic']:
                     return 'HISPANIC'
-            elif user_lower in ['asian american', 'asian']:
-                if 'asian' in [opt.lower() for opt in options]:
+                elif user_lower in ['asian american', 'asian']:
                     return 'ASIAN'
-            elif user_lower in ['native', 'indigenous', 'american indian']:
-                if 'native' in [opt.lower() for opt in options]:
+                elif user_lower in ['native', 'indigenous', 'american indian']:
                     return 'NATIVE'
-            elif user_lower in ['pacific islander', 'hawaiian']:
-                if 'pacific' in [opt.lower() for opt in options]:
+                elif user_lower in ['pacific islander', 'hawaiian']:
                     return 'PACIFIC'
-            elif user_lower in ['multiracial', 'mixed', 'biracial']:
-                if 'two_or_more' in [opt.lower() for opt in options]:
+                elif user_lower in ['multiracial', 'mixed', 'biracial']:
                     return 'TWO_OR_MORE'
-            elif user_lower in ['skip', 'pass', 'rather not say']:
-                if 'prefer_not_to_say' in [opt.lower() for opt in options]:
+                elif user_lower in ['skip', 'pass', 'rather not say']:
                     return 'PREFER_NOT_TO_SAY'
 
             # Test status
-            elif user_lower in ['took it', 'yes i have', 'submitted']:
-                if 'yes' in [opt.lower() for opt in options]:
+            if 'yes' in [opt.lower() for opt in options] and 'no' in [opt.lower() for opt in options]:
+                if user_lower in ['took it', 'yes i have', 'submitted', 'yeah', 'yup', 'yep']:
                     return 'yes'
-            elif user_lower in ['haven\'t taken', 'didn\'t take', 'no test']:
-                if 'no' in [opt.lower() for opt in options]:
+                elif user_lower in ['haven\'t taken', 'didn\'t take', 'no test', 'nope', 'nah']:
                     return 'no'
-            elif user_lower in ['will take', 'plan to', 'going to']:
-                if 'planning' in [opt.lower() for opt in options]:
+                elif user_lower in ['will take', 'plan to', 'going to', 'planning to']:
                     return 'planning'
 
             # Generic "no preference" variations
-            elif user_lower in ['any', 'either', 'no preference', "don't care", "doesn't matter", 'both']:
+            if user_lower in ['any', 'either', 'no preference', "don't care", "doesn't matter", 'both']:
                 for opt in options:
                     if 'no_preference' in opt.lower() or 'either' in opt.lower():
                         return opt
@@ -846,9 +865,42 @@ def process_user_answer(user_input, question_config, profile_data):
             ]
             if user_input.lower().strip() in negative_responses:
                 return []
-            # Split by comma and filter out empty/whitespace items
-            items = [item.strip().upper() for item in user_input.split(',') if item.strip()]
-            return items
+
+            # State name to code mapping
+            state_map = {
+                'california': 'CA', 'oregon': 'OR', 'washington': 'WA', 'texas': 'TX',
+                'new york': 'NY', 'florida': 'FL', 'illinois': 'IL', 'pennsylvania': 'PA',
+                'ohio': 'OH', 'georgia': 'GA', 'north carolina': 'NC', 'michigan': 'MI',
+                'new jersey': 'NJ', 'virginia': 'VA', 'massachusetts': 'MA', 'arizona': 'AZ',
+                'tennessee': 'TN', 'indiana': 'IN', 'missouri': 'MO', 'maryland': 'MD',
+                'wisconsin': 'WI', 'colorado': 'CO', 'minnesota': 'MN', 'south carolina': 'SC',
+                'alabama': 'AL', 'louisiana': 'LA', 'kentucky': 'KY', 'oklahoma': 'OK',
+                'connecticut': 'CT', 'utah': 'UT', 'iowa': 'IA', 'nevada': 'NV',
+                'arkansas': 'AR', 'mississippi': 'MS', 'kansas': 'KS', 'new mexico': 'NM',
+                'nebraska': 'NE', 'west virginia': 'WV', 'idaho': 'ID', 'hawaii': 'HI',
+                'new hampshire': 'NH', 'maine': 'ME', 'montana': 'MT', 'rhode island': 'RI',
+                'delaware': 'DE', 'south dakota': 'SD', 'north dakota': 'ND', 'alaska': 'AK',
+                'vermont': 'VT', 'wyoming': 'WY'
+            }
+
+            # Split by comma and "and"
+            items = []
+            for part in user_input.split(','):
+                # Further split by "and"
+                for subpart in part.split(' and '):
+                    cleaned = subpart.strip().lower()
+                    if cleaned:
+                        # Check if it's a state name
+                        if cleaned in state_map:
+                            items.append(state_map[cleaned])
+                        # Check if it's already a 2-letter code
+                        elif len(cleaned) == 2:
+                            items.append(cleaned.upper())
+                        # Otherwise just take it as-is (uppercase)
+                        else:
+                            items.append(cleaned.upper())
+
+            return items if items else []
 
         else:  # text
             return user_input
@@ -858,7 +910,8 @@ def process_user_answer(user_input, question_config, profile_data):
 
 
 def build_profile_from_data(profile_data):
-    """Build EnhancedUserProfile from collected data."""
+    """Build EnhancedUserProfile from collected data and update shared state."""
+    from src.shared_profile_state import update_profile_from_data, build_profile_from_shared_state, mark_profile_complete
 
     # Map priorities to weights
     priorities_text = profile_data.get('priorities', 'default').lower()
@@ -867,44 +920,88 @@ def build_profile_from_data(profile_data):
         weights = {
             'weight_roi': 0.20,
             'weight_affordability': 0.25,
-            'weight_equity': 0.20,
-            'weight_support': 0.15,
-            'weight_academic_fit': 0.15,
-            'weight_environment': 0.05
+            'weight_equity': 0.18,
+            'weight_support': 0.13,
+            'weight_academic_fit': 0.13,
+            'weight_environment': 0.06,
+            'weight_access': 0.05
         }
     else:
-        # Parse custom priorities
+        # Parse custom priorities with position-based weighting
+        # Map matches the profile editor's weight fields exactly
         priority_map = {
-            'affordability': 'weight_affordability',
-            'support': 'weight_support',
+            # ROI first since it was being underweighted
             'roi': 'weight_roi',
-            'academic': 'weight_academic_fit',
+            'return on investment': 'weight_roi',
+            'earnings': 'weight_roi',
+            
+            # Affordability
+            'affordability': 'weight_affordability',
+            'cost': 'weight_affordability',
+            'financial aid': 'weight_affordability',
+            
+            # Equity & Diversity
             'equity': 'weight_equity',
             'diversity': 'weight_equity',
+            'inclusion': 'weight_equity',
+            
+            # Student Support
+            'support': 'weight_support',
+            'student support': 'weight_support',
+            'mentoring': 'weight_support',
+            
+            # Academic Fit
+            'academic': 'weight_academic_fit',
+            'major': 'weight_academic_fit',
+            'program': 'weight_academic_fit',
+            'rigor': 'weight_academic_fit',
+            
+            # Campus Environment
             'environment': 'weight_environment',
-            'fit': 'weight_environment'
+            'campus': 'weight_environment',
+            'location': 'weight_environment',
+            'culture': 'weight_environment',
+            
+            # Admission Likelihood
+            'admission': 'weight_access',
+            'access': 'weight_access',
+            'likelihood': 'weight_access',
+            'chance': 'weight_access',
+            'getting in': 'weight_access'
         }
 
-        # Start with equal weights
+        # Start with equal base weights that match the profile editor's default distribution
         weights = {
-            'weight_roi': 0.1,
-            'weight_affordability': 0.1,
-            'weight_equity': 0.1,
-            'weight_support': 0.1,
-            'weight_academic_fit': 0.1,
-            'weight_environment': 0.1
+            'weight_roi': 0.20,
+            'weight_affordability': 0.25,
+            'weight_equity': 0.18,
+            'weight_support': 0.13,
+            'weight_academic_fit': 0.13,
+            'weight_environment': 0.06,
+            'weight_access': 0.05
         }
 
-        # Boost mentioned priorities
-        mentioned_count = 0
-        for key_word, weight_key in priority_map.items():
-            if key_word in priorities_text:
-                weights[weight_key] += 0.15
-                mentioned_count += 1
-
-        # Normalize
-        total = sum(weights.values())
-        weights = {k: v/total for k, v in weights.items()}
+        # Split and clean priorities
+        priorities = [p.strip().lower() for p in priorities_text.split(',')]
+        priorities = [p for p in priorities if p]  # Remove empty strings
+        
+        # Calculate weights based on position (earlier = higher weight)
+        total_priority_weight = 0.0
+        for i, priority in enumerate(priorities):
+            # Higher weight for earlier positions (1.0, 0.5, 0.33, etc.)
+            position_weight = 1.0 / (i + 1)
+            total_priority_weight += position_weight
+            
+            # Find matching weight field
+            for keyword, weight_field in priority_map.items():
+                if keyword in priority:
+                    weights[weight_field] += position_weight * 0.25  # Scale factor
+        
+        # Normalize to ensure weights sum to 1.0
+        if total_priority_weight > 0:
+            total = sum(weights.values())
+            if total > 0:
+                weights = {k: v/total for k, v in weights.items()}
 
     # Determine test score status
     test_status = "test_optional"
@@ -931,51 +1028,56 @@ def build_profile_from_data(profile_data):
         # Default to lowest
         earnings_ceiling = 30000.0
 
-    # Build profile
-    profile = EnhancedUserProfile(
-        # Required
-        gpa=profile_data.get('gpa', 3.0),
-        annual_budget=profile_data.get('annual_budget', 20000),
-
+    # Prepare data for shared state
+    shared_data = {
         # Academic
-        test_score_status=test_status,
-        sat_score=profile_data.get('sat_score'),
-        act_score=profile_data.get('act_score'),
-        intended_major=profile_data.get('intended_major', 'Undecided'),
+        'gpa': profile_data.get('gpa', 3.0),
+        'test_score_status': test_status,
+        'sat_score': profile_data.get('sat_score'),
+        'act_score': profile_data.get('act_score'),
+        'intended_major': profile_data.get('intended_major', 'Undecided'),
 
         # Financial
-        family_income=family_income,
-        earnings_ceiling_match=earnings_ceiling,
-        work_study_needed=profile_data.get('work_study_needed', False),
+        'annual_budget': profile_data.get('annual_budget', 20000),
+        'family_income': family_income,
+        'earnings_ceiling_match': earnings_ceiling,
+        'work_study_needed': profile_data.get('work_study_needed', False),
 
         # Demographics
-        race_ethnicity=profile_data.get('race_ethnicity', 'PREFER_NOT_TO_SAY'),
-        age=profile_data.get('age'),
+        'race_ethnicity': profile_data.get('race_ethnicity', 'PREFER_NOT_TO_SAY'),
+        'age': profile_data.get('age'),
 
         # Special populations
-        is_first_gen=profile_data.get('is_first_gen', False),
-        is_student_parent=profile_data.get('is_student_parent', False),
-        is_international=profile_data.get('is_international', False),
+        'is_first_gen': profile_data.get('is_first_gen', False),
+        'is_student_parent': profile_data.get('is_student_parent', False),
+        'is_international': profile_data.get('is_international', False),
 
         # Geographic
-        home_state=profile_data.get('home_state'),
-        in_state_only=profile_data.get('in_state_only', False),
-        preferred_states=profile_data.get('preferred_states', []),
+        'home_state': profile_data.get('home_state'),
+        'in_state_only': profile_data.get('in_state_only', False),
+        'preferred_states': profile_data.get('preferred_states', []),
 
         # Environment
-        urbanization_pref=profile_data.get('urbanization_pref', 'no_preference'),
-        size_pref=profile_data.get('size_pref', 'no_preference'),
-        institution_type_pref=profile_data.get('institution_type_pref', 'either'),
-        msi_preference=profile_data.get('msi_preference', 'no_preference'),
+        'urbanization_pref': profile_data.get('urbanization_pref', 'no_preference'),
+        'size_pref': profile_data.get('size_pref', 'no_preference'),
+        'institution_type_pref': profile_data.get('institution_type_pref', 'either'),
+        'msi_preference': profile_data.get('msi_preference', 'no_preference'),
 
         # Academic priorities
-        research_opportunities=profile_data.get('research_opportunities', False),
-        small_class_sizes=profile_data.get('small_class_sizes', False),
-        strong_support_services=profile_data.get('strong_support_services', False),
+        'research_opportunities': profile_data.get('research_opportunities', False),
+        'small_class_sizes': profile_data.get('small_class_sizes', False),
+        'strong_support_services': profile_data.get('strong_support_services', False),
 
         # Weights
         **weights
-    )
+    }
+
+    # Update shared profile state
+    update_profile_from_data(shared_data)
+    mark_profile_complete()
+
+    # Build and return profile from shared state
+    profile = build_profile_from_shared_state()
 
     return profile
 
@@ -1097,33 +1199,65 @@ def display_recommendations(recommendations, profile, df, client):
                         st.info(f"💡 **Why this college?** {college_summary}")
                         st.divider()
 
-            col1, col2, col3 = st.columns(3)
+            # Key metrics at the top
+            col1, col2, col3, col4 = st.columns(4)
 
             with col1:
-                st.metric("Composite Score", f"{safe_get(college, 'composite_score', 0):.3f}")
-                st.metric("Selectivity", safe_get(college, 'selectivity_bucket', 'Unknown'))
+                st.metric("Match Score", f"{safe_get(college, 'composite_score', 0):.3f}")
 
             with col2:
-                st.metric("Affordability", f"{safe_get(college, 'personalized_affordability', 0):.3f}")
-                st.metric("Support", f"{safe_get(college, 'personalized_support', 0):.3f}")
+                net_price = (safe_get(college, 'Net Price', None) or safe_get(college, 'Average Net Price', None))
+                st.metric("Net Price", format_currency(net_price))
 
             with col3:
-                st.metric("Academic Fit", f"{safe_get(college, 'personalized_academic_fit', 0):.3f}")
-                st.metric("Equity", f"{safe_get(college, 'personalized_equity', 0):.3f}")
+                earnings = safe_get(college, 'Median Earnings of Students Working and Not Enrolled 10 Years After Entry', None)
+                st.metric("10-Year Earnings", format_currency(earnings))
+
+            with col4:
+                debt = (safe_get(college, 'Median Debt of Completers', None) or
+                       safe_get(college, 'Median Debt of Completers_CR', None))
+                st.metric("Median Debt", format_currency(debt))
+
+            # Personalized scores
+            st.markdown("**Your Personalized Fit Scores:**")
+            col1, col2, col3, col4, col5, col6 = st.columns(6)
+
+            with col1:
+                st.metric("Affordability", f"{safe_get(college, 'personalized_affordability', 0):.2f}")
+            with col2:
+                st.metric("ROI", f"{safe_get(college, 'roi_score', 0):.2f}")
+            with col3:
+                st.metric("Equity", f"{safe_get(college, 'personalized_equity', 0):.2f}")
+            with col4:
+                st.metric("Support", f"{safe_get(college, 'personalized_support', 0):.2f}")
+            with col5:
+                st.metric("Academic", f"{safe_get(college, 'personalized_academic_fit', 0):.2f}")
+            with col6:
+                st.metric("Environment", f"{safe_get(college, 'personalized_environment', 0):.2f}")
 
             # Details
-            st.markdown("### Details")
+            st.markdown("### 📊 Additional Details")
             col1, col2 = st.columns(2)
 
             with col1:
+                st.markdown("**📍 Location & Environment**")
                 # Try both with and without suffixes
                 city = (safe_get(college, 'City', None) or
                        safe_get(college, 'City_CR', None) or
                        safe_get(college, 'City_AG', 'N/A'))
                 state = (safe_get(college, 'State of Institution', None) or
                         safe_get(college, 'State of Institution_CR', None) or
-                        safe_get(college, 'State of Institution_AG', 'N/A'))
+                        safe_get(college, 'STABBR', 'N/A'))
                 st.write(f"**Location:** {city}, {state}")
+
+                # Get control/type properly
+                control = safe_get(college, 'Control of Institution', None) or safe_get(college, 'Control of Institution_CR', None)
+                if pd.notna(control):
+                    # Map numeric codes to text if needed
+                    control_map = {1: 'Public', 2: 'Private nonprofit', 3: 'Private for-profit'}
+                    if isinstance(control, (int, float)):
+                        control = control_map.get(int(control), 'Unknown')
+                    st.write(f"**Type:** {control}")
 
                 size_val = (safe_get(college, 'Institution Size Category_CR', None) or
                            safe_get(college, 'size_category', None) or
@@ -1132,12 +1266,20 @@ def display_recommendations(recommendations, profile, df, client):
 
                 urban_val = (safe_get(college, 'Degree of Urbanization', None) or
                             safe_get(college, 'urbanization', None))
-                st.write(f"**Urbanization:** {format_urbanization(urban_val)}")
+                st.write(f"**Setting:** {format_urbanization(urban_val)}")
+
+                # Total enrollment
+                enrollment = safe_get(college, 'Undergraduate Enrollment', None)
+                if enrollment and pd.notna(enrollment):
+                    st.write(f"**Enrollment:** {int(enrollment):,} students")
+
+                # Distance from home (if available)
+                distance = safe_get(college, 'Distance from Home', None)
+                if distance and pd.notna(distance):
+                    st.write(f"**Distance:** {int(distance)} miles")
 
             with col2:
-                net_price = (safe_get(college, 'Net Price', None) or
-                           safe_get(college, 'Net Price_AG', None))
-                st.write(f"**Net Price:** {format_currency(net_price)}")
+                st.markdown("**🎓 Academic Success & Value**")
 
                 grad_rate = (
                     safe_get(college, "Bachelor's Degree Graduation Rate Bachelor Degree Within 6 Years - Total", None) or
@@ -1147,9 +1289,19 @@ def display_recommendations(recommendations, profile, df, client):
                 )
                 st.write(f"**Graduation Rate:** {format_percentage(grad_rate)}")
 
-                debt = (safe_get(college, 'Median Debt of Completers', None) or
-                       safe_get(college, 'Median Debt of Completers_CR', None))
+                selectivity = safe_get(college, 'selectivity_bucket', 'Unknown')
+                st.write(f"**Selectivity:** {selectivity}")
+
+                admit_rate = safe_get(college, 'Total Percent of Applicants Admitted', None)
+                st.write(f"**Admission Rate:** {format_percentage(admit_rate)}")
+
+                st.write(f"**10-Year Earnings:** {format_currency(earnings)}")
                 st.write(f"**Median Debt:** {format_currency(debt)}")
+
+                # Calculate simple earnings/debt ratio if both available
+                if earnings and debt and not pd.isna(earnings) and not pd.isna(debt) and debt > 0:
+                    ratio = earnings / debt
+                    st.write(f"**Earnings/Debt Ratio:** {ratio:.1f}x")
 
     # Visualization
     st.divider()
@@ -1159,14 +1311,14 @@ def display_recommendations(recommendations, profile, df, client):
         recommendations.head(10),
         x='personalized_affordability',
         y='personalized_equity',
-        size='personalized_roi',
+        size='roi_score',
         color='composite_score',
         hover_name='Institution Name' if 'Institution Name' in recommendations.columns else 'INSTNM',
         labels={
             'personalized_affordability': 'Affordability',
             'personalized_equity': 'Equity',
             'composite_score': 'Match Score',
-            'personalized_roi': 'ROI'
+            'roi_score': 'ROI'
         },
         title="Affordability vs. Equity"
     )
