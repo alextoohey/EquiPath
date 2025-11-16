@@ -17,7 +17,7 @@ def render_profile_editor():
     data = st.session_state.shared_profile_data
 
     st.subheader("📝 Edit Your Profile")
-    st.markdown("Make changes to your profile below. Changes are saved automatically and apply across all tabs.")
+    st.markdown("Make changes to your profile below. **All changes are saved automatically** and apply across all tabs.")
 
     # Academic Background
     with st.expander("🎓 Academic Background", expanded=True):
@@ -184,24 +184,43 @@ def render_profile_editor():
                 key="edit_preferred_states"
             )
             data['preferred_states'] = [s.strip().upper() for s in preferred.split(',') if s.strip()] if preferred else []
-            
-            # Add zip code for distance-based filtering
+
+        # Add zip code for distance-based filtering (moved outside col2 to give it own row)
+        st.markdown("**Distance-Based Filtering**")
+        col_zip, col_dist = st.columns(2)
+
+        with col_zip:
             zip_code = st.text_input(
-                "ZIP Code (for distance filtering)",
+                "ZIP Code",
                 value=data.get('zip_code', ''),
-                key="edit_zip_code"
+                key="edit_zip_code",
+                help="Enter your 5-digit ZIP code to filter colleges by distance"
             )
-            data['zip_code'] = zip_code.strip() if zip_code and isinstance(zip_code, str) else None
-            
-            if data['zip_code']:
-                data['max_distance_from_home'] = st.slider(
-                    "Maximum distance from home (miles)",
-                    min_value=10,
-                    max_value=500,
-                    value=int(data.get('max_distance_from_home', 100)) if data.get('max_distance_from_home') else 100,
-                    step=10,
-                    key="edit_max_distance"
-                )
+            # Normalize zip code
+            if zip_code and isinstance(zip_code, str):
+                zip_code = zip_code.strip()
+                data['zip_code'] = zip_code if zip_code else None
+            else:
+                data['zip_code'] = None
+
+        with col_dist:
+            # Always show the distance slider, but disable it if no zip code
+            has_zip = bool(data.get('zip_code'))
+            distance = st.slider(
+                "Maximum distance from home (miles)",
+                min_value=10,
+                max_value=500,
+                value=int(data.get('max_distance_from_home', 100)) if data.get('max_distance_from_home') else 100,
+                step=10,
+                key="edit_max_distance",
+                disabled=not has_zip,
+                help="Set maximum distance from your ZIP code" if has_zip else "Enter a ZIP code first"
+            )
+            # Only save distance if we have a zip code
+            if has_zip:
+                data['max_distance_from_home'] = distance
+            else:
+                data['max_distance_from_home'] = None
 
     # Environment Preferences
     with st.expander("🏫 Environment Preferences"):
@@ -329,7 +348,6 @@ def render_profile_editor():
         for field in new_weights:
             data[field] = new_weights[field]
 
-    # Rebuild profile from updated data
-    build_profile_from_shared_state()
-
+    # Changes are automatically saved to session state since `data` references
+    # st.session_state.shared_profile_data directly
     return data

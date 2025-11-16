@@ -25,21 +25,26 @@ EquiPath is a comprehensive college advising tool designed to help students find
 
 Our platform offers multiple tools to help you in your college search:
 
-**✏️ My Profile & Matches**
-- View and edit your profile
-- Get personalized college recommendations
+**✏️ My Profile**
+- Build and edit your profile
+- Set your preferences and priorities
+- Your profile is automatically saved and shared across all pages
+
+**🎯 My Recommendations**
+- Get personalized college recommendations based on your profile
+- View AI-generated explanations for each recommendation
 - Compare colleges based on affordability, ROI, equity, and more
-- Visual comparison tools
+- Visual comparison tools and interactive charts
+- Ask questions with our Q&A chatbot
 
 **🤖 AI Chat Assistant**
-- Build your profile through conversation
-- Get AI-generated explanations for recommendations
-- Ask questions about colleges and get personalized insights
+- Build your profile through natural conversation
+- Get personalized insights and guidance
 - Voice input and output support
 
 **🗺️ Interactive School Map**
-- Explore postsecondary schools across the United States
-- Filter schools by state
+- Explore colleges across the United States geographically
+- Filter by state and view your recommended schools
 - View detailed information for each institution
 
 ### How EquiPath Works
@@ -69,15 +74,17 @@ with st.sidebar:
     st.info("""
     Use the pages in the sidebar above to:
 
-    - **My Profile**: Edit your profile and get matches
+    - **My Profile**: Build and edit your profile
+    - **My Recommendations**: Get personalized college matches
     - **AI Chat Assistant**: Build profile through conversation
     - **School Map**: Explore schools geographically
     """)
 
     st.markdown("### 💡 Tips")
     st.markdown("""
-    - Start with the **AI Chat Assistant** for a conversational experience
-    - Use **My Profile** to edit your profile and get recommendations
-    - Your profile is shared across all pages - build it once, use it everywhere!
-    - Explore the **School Map** to see schools in specific regions
+    1. Start by building your profile (**My Profile** or **AI Chat Assistant**)
+    2. Get personalized recommendations (**My Recommendations**)
+    3. Ask questions with the Q&A chatbot on the recommendations page
+    4. Explore recommended schools on the **School Map**
+    5. Your profile is shared across all pages - build it once, use it everywhere!
     """)
