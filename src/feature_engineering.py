@@ -268,28 +268,43 @@ def add_access_score(df):
     return df
 
 
-def build_featured_college_df(data_dir='data'):
+def build_featured_college_df(data_dir='data', earnings_ceiling=30000.0):
     """
     Main function to build the featured college DataFrame.
 
     Loads merged data and applies all feature engineering functions.
 
+    IMPORTANT: Since the affordability data has multiple rows per institution
+    (one for each earnings ceiling), we filter to a specific earnings ceiling
+    to get one row per institution for feature engineering.
+
     Parameters:
     -----------
     data_dir : str
         Directory containing the data files
+    earnings_ceiling : float
+        Which earnings ceiling scenario to use for affordability metrics.
+        Default: 30000.0 (lowest income bracket)
+        Valid values: 30000.0, 48000.0, 75000.0, 110000.0, 150000.0
+        Each represents the upper bound of the student family earnings bracket.
 
     Returns:
     --------
     pd.DataFrame
-        Fully featured DataFrame with all computed metrics
+        Fully featured DataFrame with all computed metrics.
+        One row per institution.
     """
     print("="*60)
     print("BUILDING FEATURED COLLEGE DATAFRAME")
     print("="*60)
 
-    # Load merged data
-    df = load_merged_data(data_dir=data_dir, join_key='Institution Name')
+    # Load merged data filtered to specific earnings ceiling
+    # This gives us one row per institution for the target income bracket
+    df = load_merged_data(
+        data_dir=data_dir,
+        join_key='Institution Name',
+        earnings_ceiling=earnings_ceiling
+    )
 
     print(f"\nStarting with {len(df)} institutions")
     print(f"Starting with {len(df.columns)} columns")
