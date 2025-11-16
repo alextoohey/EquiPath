@@ -268,28 +268,45 @@ def add_access_score(df):
     return df
 
 
-def build_featured_college_df(data_dir='data'):
+def build_featured_college_df(data_dir='data', force_reload=False):
     """
     Main function to build the featured college DataFrame.
 
     Loads merged data and applies all feature engineering functions.
+    Uses Parquet caching for instant loading after first run.
 
     Parameters:
     -----------
     data_dir : str
         Directory containing the data files
+    force_reload : bool
+        If True, rebuild features from scratch instead of using cache
 
     Returns:
     --------
     pd.DataFrame
         Fully featured DataFrame with all computed metrics
     """
+    # Check for cached featured data
+    from src.data_loading import _get_cache_dir
+    cache_dir = _get_cache_dir(data_dir)
+    featured_cache_path = os.path.join(cache_dir, 'featured_college_data.parquet')
+
+    if not force_reload and os.path.exists(featured_cache_path):
+        print("="*60)
+        print("Loading featured college data from cache...")
+        print("="*60)
+        df = pd.read_parquet(featured_cache_path)
+        print(f"✓ Loaded {len(df)} rows and {len(df.columns)} columns from cache")
+        print("  (To rebuild features, use force_reload=True)")
+        return df
+
     print("="*60)
     print("BUILDING FEATURED COLLEGE DATAFRAME")
     print("="*60)
 
-    # Load merged data
-    df = load_merged_data(data_dir=data_dir, join_key='Institution Name')
+    # Load merged data using UNITID join (recommended for better matching)
+    df = load_merged_data(data_dir=data_dir, join_key='UNITID', force_reload=force_reload)
 
     print(f"\nStarting with {len(df)} institutions")
     print(f"Starting with {len(df.columns)} columns")
@@ -302,6 +319,11 @@ def build_featured_college_df(data_dir='data'):
 
     print(f"\n✓ Feature engineering complete!")
     print(f"Final dataset: {len(df)} rows, {len(df.columns)} columns")
+
+    # Cache the featured data
+    print(f"\nSaving featured data to cache...")
+    df.to_parquet(featured_cache_path, engine='pyarrow', compression='snappy')
+    print(f"✓ Cache saved to: {featured_cache_path}")
 
     # Display summary of key scores
     print("\n" + "="*60)

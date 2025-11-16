@@ -12,10 +12,9 @@ import os
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.feature_engineering import build_featured_college_df
-from src.clustering import add_clusters
 from src.user_profile import UserProfile
 from src.scoring import rank_colleges_for_user, choose_weights
+from src.cached_data import load_featured_data_with_clusters
 
 
 def format_currency(value):
@@ -38,15 +37,6 @@ def safe_get(row, key, default="N/A"):
     if pd.isna(value):
         return default
     return value
-
-
-@st.cache_data
-def load_data():
-    """Load and cache the featured college data with clusters."""
-    print("Loading data for Streamlit app...")
-    df = build_featured_college_df()
-    df_clustered, centroids, labels = add_clusters(df, n_clusters=5)
-    return df_clustered, centroids, labels
 
 
 def main():
@@ -74,9 +64,9 @@ def main():
 
     st.divider()
 
-    # Load data
+    # Load data (uses shared cached module)
     with st.spinner("Loading college data..."):
-        df, centroids, cluster_labels = load_data()
+        df, centroids, cluster_labels = load_featured_data_with_clusters()
 
     # Sidebar - User Profile Input
     st.sidebar.header("📋 Your Profile")

@@ -53,6 +53,7 @@ config.json
 # Cache
 .cache/
 *.cache
+data/.cache/  # Parquet cache files
 
 # API Keys (IMPORTANT!)
 .env

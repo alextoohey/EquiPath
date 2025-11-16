@@ -12,3 +12,6 @@ anthropic>=0.39.0
 python-dotenv>=1.0.0
 folium>=0.14.0
 streamlit-folium>=0.15.0
+audio-recorder-streamlit>=0.0.10
+elevenlabs>=2.23.0
+soundfile>=0.13.1

@@ -9,16 +9,18 @@ import plotly.express as px
 import json
 import sys
 import os
+import io
+import base64
+from elevenlabs import ElevenLabs
 
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.feature_engineering import build_featured_college_df
-from src.clustering import add_clusters
 from src.user_profile import UserProfile
 from src.scoring import rank_colleges_for_user, choose_weights
 from src.llm_integration import parse_user_text_to_profile, generate_explanations, build_recommendation_summary
 from src.config import get_anthropic_api_key  # Load API key from .env
+from src.cached_data import load_featured_data_with_clusters
 
 # Import Anthropic
 try:
@@ -42,15 +44,6 @@ def format_percentage(value):
     return f"{value:.1f}%"
 
 
-@st.cache_data
-def load_data():
-    """Load and cache the featured college data with clusters."""
-    print("Loading data for Streamlit app...")
-    df = build_featured_college_df()
-    df_clustered, centroids, labels = add_clusters(df, n_clusters=5)
-    return df_clustered, centroids, labels
-
-
 def get_anthropic_client():
     """Get Anthropic client if API key is available."""
     # Get API key from .env (loaded by config module)
@@ -65,7 +58,21 @@ def chat_collect_profile():
     """Interactive chat interface to collect user profile."""
 
     st.subheader("💬 Chat with EquiPath")
-    st.markdown("Tell me about yourself and I'll help you find the perfect colleges!")
+
+    # Voice mode toggle for profile chat
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        st.markdown("Tell me about yourself and I'll help you find the perfect colleges!")
+    with col2:
+        if 'profile_use_voice' not in st.session_state:
+            st.session_state.profile_use_voice = False
+        if st.button("🎤 Voice" if not st.session_state.profile_use_voice else "⌨️ Text", use_container_width=True, key="profile_voice_btn"):
+            st.session_state.profile_use_voice = not st.session_state.profile_use_voice
+            # Reset chat when switching modes
+            st.session_state.chat_messages = []
+            st.session_state.chat_step = 0
+            st.session_state.profile_data = {}
+            st.rerun()
 
     # Initialize session state for chat
     if 'chat_messages' not in st.session_state:
@@ -73,25 +80,54 @@ def chat_collect_profile():
         st.session_state.profile_data = {}
         st.session_state.chat_step = 0
 
-    # Chat questions flow
-    questions = [
-        "Hi! I'm here to help you find colleges. What's your name?",
-        "Nice to meet you! How would you describe your racial/ethnic background? (e.g., Black, Hispanic, White, Asian, Native American, Pacific Islander, or Other)",
-        "Are you a student-parent (do you have children)?",
-        "Are you a first-generation college student (neither parent completed a 4-year degree)?",
-        "What's your approximate annual budget for college? (Just a number in dollars, like 20000)",
-        "What's your household income level? (LOW, MEDIUM, or HIGH)",
-        "What's your current GPA on a 4.0 scale?",
-        "Which state are you from? (Enter 2-letter state code like CA, NY, TX, etc.)",
-        "Do you want to only consider colleges in your home state? (yes/no)",
-        "Do you prefer public schools only? (yes/no)",
-        "What school size do you prefer? (Small, Medium, Large, or 'any' if no preference)"
-    ]
+    # Different question flow based on mode
+    if st.session_state.profile_use_voice:
+        # Voice mode - ask everything at once
+        questions = [
+            """Hi! I'm here to help you find colleges. To save time, tell me everything about yourself in one go:
+
+What's your name, racial or ethnic background, current GPA, annual budget for college, household income level (low, medium, or high), and which state you're from?
+
+Also let me know: Are you a student-parent? Are you a first-generation college student? Do you want only in-state or public schools? What size school do you prefer?
+
+Just tell me everything naturally!"""
+        ]
+    else:
+        # Text mode - ask sequentially
+        questions = [
+            "Hi! I'm here to help you find colleges. What's your name?",
+            "Nice to meet you! How would you describe your racial/ethnic background? (e.g., Black, Hispanic, White, Asian, Native American, Pacific Islander, or Other)",
+            "Are you a student-parent (do you have children)?",
+            "Are you a first-generation college student (neither parent completed a 4-year degree)?",
+            "What's your approximate annual budget for college? (Just a number in dollars, like 20000)",
+            "What's your household income level? (LOW, MEDIUM, or HIGH)",
+            "What's your current GPA on a 4.0 scale?",
+            "Which state are you from? (Enter 2-letter state code like CA, NY, TX, etc.)",
+            "Do you want to only consider colleges in your home state? (yes/no)",
+            "Do you prefer public schools only? (yes/no)",
+            "What school size do you prefer? (Small, Medium, Large, or 'any' if no preference)"
+        ]
 
     # Display chat history
-    for message in st.session_state.chat_messages:
+    for idx, message in enumerate(st.session_state.chat_messages):
         with st.chat_message(message["role"]):
             st.write(message["content"])
+            # Show audio player for assistant messages in voice mode
+            if (message["role"] == "assistant" and
+                "audio" in message and
+                message["audio"] and
+                st.session_state.profile_use_voice):
+                # Autoplay only the last message
+                if idx == len(st.session_state.chat_messages) - 1:
+                    audio_b64 = base64.b64encode(message["audio"]).decode()
+                    audio_html = f"""
+                        <audio autoplay controls>
+                            <source src="data:audio/mpeg;base64,{audio_b64}" type="audio/mpeg">
+                        </audio>
+                    """
+                    st.markdown(audio_html, unsafe_allow_html=True)
+                else:
+                    st.audio(message["audio"], format="audio/mpeg")
 
     # Show current question
     if st.session_state.chat_step < len(questions):
@@ -100,15 +136,102 @@ def chat_collect_profile():
         assistant_msg_count = sum(1 for msg in st.session_state.chat_messages if msg["role"] == "assistant")
 
         if assistant_msg_count <= st.session_state.chat_step:
-            with st.chat_message("assistant"):
-                st.write(questions[st.session_state.chat_step])
-                st.session_state.chat_messages.append({
-                    "role": "assistant",
-                    "content": questions[st.session_state.chat_step]
-                })
+            # Generate audio for question if in voice mode
+            question_audio = None
+            if st.session_state.profile_use_voice:
+                eleven_api_key = os.getenv("ELEVENLABS_API_KEY")
+                if eleven_api_key:
+                    try:
+                        with st.spinner("🔊 Generating voice..."):
+                            eleven_client = ElevenLabs(api_key=eleven_api_key)
+                            audio_generator = eleven_client.text_to_speech.convert(
+                                voice_id="pNInz6obpgDQGcFmaJgB",  # Adam voice
+                                text=questions[st.session_state.chat_step],
+                                model_id="eleven_turbo_v2_5"
+                            )
+                            question_audio = b"".join(audio_generator)
+                    except Exception as e:
+                        st.error(f"TTS error: {e}")
 
-        # User input
-        user_input = st.chat_input("Your answer...")
+            # Add question to chat history
+            st.session_state.chat_messages.append({
+                "role": "assistant",
+                "content": questions[st.session_state.chat_step],
+                "audio": question_audio
+            })
+            # Rerun to display with audio
+            st.rerun()
+
+        # User input - Voice or Text
+        user_input = None
+
+        # FIRST: Check for pending voice input (from previous rerun)
+        if 'pending_profile_input' in st.session_state and st.session_state.pending_profile_input:
+            user_input = st.session_state.pending_profile_input
+            st.session_state.pending_profile_input = None
+            # Don't show audio input, just process this input
+
+        elif st.session_state.profile_use_voice:
+            # Voice mode - show audio recorder
+            st.markdown("**🎤 Click to start recording, then click stop when done:**")
+            audio_value = st.audio_input("Record your answer", key="profile_audio")
+
+            if audio_value:
+                # Check if this audio was already processed
+                if 'last_profile_audio' not in st.session_state:
+                    st.session_state.last_profile_audio = None
+
+                # Only process if it's new audio
+                if audio_value != st.session_state.last_profile_audio:
+                    st.session_state.last_profile_audio = audio_value
+
+                    with st.spinner("🎧 Transcribing your voice..."):
+                        try:
+                            eleven_api_key = os.getenv("ELEVENLABS_API_KEY")
+                            if not eleven_api_key:
+                                st.error("⚠️ ELEVENLABS_API_KEY not set in .env file")
+                            elif eleven_api_key == "your-api-key-here":
+                                st.error("⚠️ Please set your actual ELEVENLABS_API_KEY in .env file")
+                            else:
+                                # Get audio bytes
+                                audio_bytes = audio_value.getvalue()
+                                st.info(f"🔊 Audio size: {len(audio_bytes)} bytes")
+
+                                if len(audio_bytes) < 100:
+                                    st.error("❌ Audio file is too small - please speak louder or check your microphone")
+                                else:
+                                    # Save to temporary file for debugging
+                                    import tempfile
+                                    with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
+                                        tmp_file.write(audio_bytes)
+                                        tmp_path = tmp_file.name
+
+                                    st.info(f"📁 Saved audio to: {tmp_path}")
+
+                                    eleven_client = ElevenLabs(api_key=eleven_api_key)
+
+                                    # Open the file and pass to ElevenLabs
+                                    with open(tmp_path, 'rb') as audio_file:
+                                        transcript = eleven_client.speech_to_text.convert(
+                                            file=audio_file,
+                                            model_id="scribe_v2"
+                                        )
+                                        transcribed_text = transcript.text
+                                        st.info(f"📝 Raw transcript result: '{transcribed_text}'")
+
+                                    if transcribed_text and transcribed_text.strip():
+                                        # Store in session state and rerun
+                                        st.session_state.pending_profile_input = transcribed_text.strip()
+                                        st.rerun()
+                                    else:
+                                        st.warning("⚠️ Transcription returned empty text - please speak clearly and loudly")
+                        except Exception as e:
+                            st.error(f"❌ Transcription error: {type(e).__name__}: {str(e)}")
+                            import traceback
+                            st.code(traceback.format_exc())
+        else:
+            # Text mode
+            user_input = st.chat_input("Your answer...")
 
         if user_input:
             # Add user message
@@ -120,7 +243,73 @@ def chat_collect_profile():
             # Process answer
             step = st.session_state.chat_step
 
-            if step == 0:  # Name
+            # Voice mode - parse everything at once using AI
+            if st.session_state.profile_use_voice and step == 0:
+                with st.spinner("🤖 Understanding your profile..."):
+                    try:
+                        from anthropic import Anthropic
+                        api_key = get_anthropic_api_key()
+
+                        if api_key:
+                            client = Anthropic(api_key=api_key)
+                            response = client.messages.create(
+                                model="claude-3-haiku-20240307",
+                                max_tokens=500,
+                                temperature=0.3,
+                                system="""Extract student profile information from natural language. Return ONLY valid JSON:
+{
+  "name": string,
+  "race": one of ["BLACK", "HISPANIC", "WHITE", "ASIAN", "NATIVE", "PACIFIC", "OTHER"],
+  "is_parent": boolean,
+  "first_gen": boolean,
+  "budget": number,
+  "income_bracket": one of ["LOW", "MEDIUM", "HIGH"],
+  "gpa": number (0.0-4.0),
+  "state": string (2-letter code) or null,
+  "in_state_only": boolean,
+  "public_only": boolean,
+  "school_size_pref": one of ["Small", "Medium", "Large", null]
+}
+
+Use defaults for missing info: race="OTHER", is_parent=false, first_gen=false, budget=25000, income_bracket="MEDIUM", gpa=3.0, in_state_only=false, public_only=false, school_size_pref=null""",
+                                messages=[{"role": "user", "content": user_input}]
+                            )
+
+                            content = response.content[0].text.strip()
+                            # Remove markdown code blocks if present
+                            if content.startswith("```"):
+                                content = content.split("```")[1]
+                                if content.startswith("json"):
+                                    content = content[4:]
+                                content = content.strip()
+
+                            profile_dict = json.loads(content)
+                            st.session_state.profile_data = profile_dict
+                            # Skip to end
+                            st.session_state.chat_step = 999
+                            st.rerun()
+                        else:
+                            st.error("API key needed for voice mode parsing")
+                    except Exception as e:
+                        st.error(f"Error parsing profile: {e}")
+                        # Fall back to defaults
+                        st.session_state.profile_data = {
+                            'name': 'Student',
+                            'race': 'OTHER',
+                            'is_parent': False,
+                            'first_gen': False,
+                            'budget': 25000,
+                            'income_bracket': 'MEDIUM',
+                            'gpa': 3.0,
+                            'state': None,
+                            'in_state_only': False,
+                            'public_only': False,
+                            'school_size_pref': None
+                        }
+                        st.session_state.chat_step = 999
+                        st.rerun()
+
+            elif step == 0:  # Text mode - Name
                 st.session_state.profile_data['name'] = user_input
             elif step == 1:  # Race
                 race_map = {
@@ -313,9 +502,9 @@ def main():
                 del st.session_state[key]
             st.rerun()
 
-    # Load data
+    # Load data (uses shared cached module)
     with st.spinner("Loading college data..."):
-        df, centroids, cluster_labels = load_data()
+        df, centroids, cluster_labels = load_featured_data_with_clusters()
 
     client = get_anthropic_client()
 
@@ -473,20 +662,88 @@ def main():
             # Add conversational Q&A chatbot
             st.divider()
             st.subheader("💬 Ask Questions About Your Colleges")
-            st.markdown("Have questions about these schools or want to know about other colleges? Ask me anything!")
+
+            # Voice mode toggle
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.markdown("Have questions about these schools or want to know about other colleges? Ask me anything!")
+            with col2:
+                if 'use_voice' not in st.session_state:
+                    st.session_state.use_voice = False
+                if st.button("🎤 Voice" if not st.session_state.use_voice else "⌨️ Text", use_container_width=True):
+                    st.session_state.use_voice = not st.session_state.use_voice
+                    st.rerun()
 
             # Initialize Q&A chat history
             if 'qa_messages' not in st.session_state:
                 st.session_state.qa_messages = []
 
             # Display Q&A chat history
-            for msg in st.session_state.qa_messages:
+            for idx, msg in enumerate(st.session_state.qa_messages):
                 with st.chat_message(msg["role"]):
                     st.write(msg["content"])
+                    # Show audio player for assistant messages in voice mode
+                    if (msg["role"] == "assistant" and
+                        "audio" in msg and
+                        msg["audio"] and
+                        st.session_state.use_voice):
+                        # Autoplay only the last message
+                        if idx == len(st.session_state.qa_messages) - 1:
+                            audio_b64 = base64.b64encode(msg["audio"]).decode()
+                            audio_html = f"""
+                                <audio autoplay controls>
+                                    <source src="data:audio/mpeg;base64,{audio_b64}" type="audio/mpeg">
+                                </audio>
+                            """
+                            st.markdown(audio_html, unsafe_allow_html=True)
+                        else:
+                            st.audio(msg["audio"], format="audio/mpeg")
 
             # Q&A input
             if client:
-                user_question = st.chat_input("Ask about colleges, compare schools, or request more information...")
+                user_question = None
+
+                # Check for pending voice input
+                if 'pending_qa_input' in st.session_state and st.session_state.pending_qa_input:
+                    user_question = st.session_state.pending_qa_input
+                    st.session_state.pending_qa_input = None
+
+                # Voice input
+                if st.session_state.use_voice and not user_question:
+                    st.markdown("**🎤 Click to start recording, then click stop when done:**")
+                    audio_value = st.audio_input("Record your question", key="qa_audio")
+
+                    if audio_value:
+                        # Check if this audio was already processed
+                        if 'last_qa_audio' not in st.session_state:
+                            st.session_state.last_qa_audio = None
+
+                        # Only process if it's new audio
+                        if audio_value != st.session_state.last_qa_audio:
+                            st.session_state.last_qa_audio = audio_value
+
+                            with st.spinner("🎧 Transcribing your voice..."):
+                                try:
+                                    eleven_api_key = os.getenv("ELEVENLABS_API_KEY")
+                                    if not eleven_api_key:
+                                        st.error("⚠️ ELEVENLABS_API_KEY not set")
+                                    else:
+                                        eleven_client = ElevenLabs(api_key=eleven_api_key)
+                                        transcript = eleven_client.speech_to_text.convert(
+                                            file=audio_value,
+                                            model_id="scribe_v2"
+                                        )
+                                        transcribed_text = transcript.text
+                                        if transcribed_text:
+                                            st.info(f"📝 You asked: {transcribed_text}")
+                                            # Force immediate processing
+                                            st.session_state.pending_qa_input = transcribed_text
+                                            st.rerun()
+                                except Exception as e:
+                                    st.error(f"Transcription error: {e}")
+                elif not st.session_state.use_voice and not user_question:
+                    # Text input
+                    user_question = st.chat_input("Ask about colleges, compare schools, or request more information...")
 
                 if user_question:
                     # Add user message
@@ -530,11 +787,32 @@ When mentioning dollar amounts, write them WITHOUT the dollar sign to avoid form
                             )
 
                             ai_response = response.content[0].text
-                            st.session_state.qa_messages.append({"role": "assistant", "content": ai_response})
 
-                            # Display the new response immediately
-                            with st.chat_message("assistant"):
-                                st.write(ai_response)
+                            # Generate audio if in voice mode
+                            response_audio = None
+                            if st.session_state.use_voice:
+                                eleven_api_key = os.getenv("ELEVENLABS_API_KEY")
+                                if eleven_api_key:
+                                    try:
+                                        with st.spinner("🔊 Generating voice response..."):
+                                            eleven_client = ElevenLabs(api_key=eleven_api_key)
+                                            audio_generator = eleven_client.text_to_speech.convert(
+                                                voice_id="pNInz6obpgDQGcFmaJgB",  # Adam voice
+                                                text=ai_response,
+                                                model_id="eleven_turbo_v2_5"
+                                            )
+                                            response_audio = b"".join(audio_generator)
+                                    except Exception as e:
+                                        st.error(f"TTS error: {e}")
+
+                            st.session_state.qa_messages.append({
+                                "role": "assistant",
+                                "content": ai_response,
+                                "audio": response_audio
+                            })
+
+                            # Trigger rerun to show the message with audio
+                            st.rerun()
 
                         except Exception as e:
                             st.error(f"Error generating response: {str(e)}")
