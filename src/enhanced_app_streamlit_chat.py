@@ -115,12 +115,21 @@ def load_enhanced_data(earnings_ceiling=30000.0, zip_code=None, max_distance=Non
     # Load the data
     df = build_enhanced_featured_college_df(earnings_ceiling=earnings_ceiling)
     
-    # Add distance column if zip code is provided
+    # Filter by distance if zip code and max_distance are provided
     if zip_code and max_distance:
-        from src.distance_utils import add_distance_column
-        df = add_distance_column(df, zip_code)
-        df = df[df['distance_miles'] <= max_distance]
-        
+        from src.distance_utils import filter_by_radius
+        try:
+            # Convert to string and strip any whitespace
+            zip_str = str(zip_code).strip()
+            # Filter by radius
+            df = filter_by_radius(
+                df=df,
+                zip_code=zip_str,
+                radius_miles=float(max_distance)
+            )
+        except Exception as e:
+            print(f"Error filtering by distance: {e}")
+    
     return df
 
 
@@ -147,15 +156,47 @@ def analyze_pathway_options(profile, df_merged):
     else:
         df_filtered = df_merged.copy()
 
+    # Debug logging
+    print(f"\n[DEBUG] Zip Code Filtering Debug Info:")
+    print(f"  - Profile zip_code: {profile.zip_code}")
+    print(f"  - Profile max_distance_from_home: {profile.max_distance_from_home}")
+    print(f"  - DataFrame shape before filtering: {df_filtered.shape}")
+    print(f"  - Available columns: {', '.join(sorted(df_filtered.columns))}")
+    
+    # Check for required columns
+    has_lat = 'Latitude' in df_filtered.columns
+    has_lon = 'Longitude' in df_filtered.columns
+    print(f"  - Has Latitude column: {has_lat}")
+    print(f"  - Has Longitude column: {has_lon}")
+    
+    if has_lat and has_lon:
+        print("  - Sample coordinates:")
+        print(df_filtered[['Institution Name', 'State of Institution', 'Latitude', 'Longitude']].head(2).to_string())
+
     # Filter by zip code radius BEFORE income filtering
     if profile.zip_code and profile.max_distance_from_home:
         from src.distance_utils import filter_by_radius
-        print(f"  [Pathway] Applying radius filter: {profile.max_distance_from_home} miles from zip {profile.zip_code}")
-        df_filtered = filter_by_radius(df_filtered, profile.zip_code, profile.max_distance_from_home)
-        print(f"  [Pathway] After radius filter: {len(df_filtered)} institutions")
+        print(f"\n[DEBUG] Attempting to filter by radius: {profile.max_distance_from_home} miles from zip {profile.zip_code}")
+        try:
+            df_filtered = filter_by_radius(df_filtered, profile.zip_code, profile.max_distance_from_home)
+            print(f"[DEBUG] After radius filter: {len(df_filtered)} institutions remaining")
+            if 'distance_miles' in df_filtered.columns:
+                print(f"[DEBUG] Distance range: {df_filtered['distance_miles'].min():.1f} to {df_filtered['distance_miles'].max():.1f} miles")
+        except Exception as e:
+            print(f"[ERROR] Error in filter_by_radius: {str(e)}")
+            import traceback
+            traceback.print_exc()
     elif profile.zip_code:
-        from src.distance_utils import add_distance_column
-        df_filtered = add_distance_column(df_filtered, profile.zip_code)
+        print(f"\n[DEBUG] Adding distance column for zip code: {profile.zip_code}")
+        try:
+            from src.distance_utils import add_distance_column
+            df_filtered = add_distance_column(df_filtered, profile.zip_code)
+            if 'distance_miles' in df_filtered.columns:
+                print(f"[DEBUG] Added distance column. Range: {df_filtered['distance_miles'].min():.1f} to {df_filtered['distance_miles'].max():.1f} miles")
+        except Exception as e:
+            print(f"[ERROR] Error adding distance column: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
     # Filter by income bracket using earnings_ceiling_match from profile
     if 'Student Family Earnings Ceiling' in df_filtered.columns:
@@ -1431,7 +1472,6 @@ def build_profile_from_data(profile_data):
         'preferred_states': profile_data.get('preferred_states', []),
         'zip_code': profile_data.get('zip_code'),
         'max_distance_from_home': profile_data.get('max_distance_from_home'),
-        'max_distance_from_home': profile_data.get('max_distance_from_home'),
 
         # Environment
         'urbanization_pref': profile_data.get('urbanization_pref', 'no_preference'),
@@ -1961,7 +2001,12 @@ def main():
         with st.spinner("Finding your perfect college matches..."):
             # Redirect stdout to suppress print statements
             with contextlib.redirect_stdout(io.StringIO()):
-                colleges_df = load_enhanced_data(earnings_ceiling=profile.earnings_ceiling_match)
+                # Load data with zip code and distance filtering if provided
+                colleges_df = load_enhanced_data(
+                    earnings_ceiling=profile.earnings_ceiling_match,
+                    zip_code=profile.zip_code,
+                    max_distance=profile.max_distance_from_home
+                )
                 df_merged = load_pathway_data()
                 recommendations = rank_colleges_for_user(colleges_df, profile, top_k=15)
 

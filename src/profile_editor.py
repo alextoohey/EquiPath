@@ -191,7 +191,7 @@ def render_profile_editor():
                 value=data.get('zip_code', ''),
                 key="edit_zip_code"
             )
-            data['zip_code'] = zip_code if zip_code.strip() else None
+            data['zip_code'] = zip_code.strip() if zip_code and isinstance(zip_code, str) else None
             
             if data['zip_code']:
                 data['max_distance_from_home'] = st.slider(
