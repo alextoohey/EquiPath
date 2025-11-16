@@ -102,11 +102,26 @@ def format_size(value):
     return size_map.get(value, "N/A")
 
 
-@st.cache_data
-def load_enhanced_data(earnings_ceiling=30000.0):
-    """Load and cache enhanced college data."""
-    # Load silently - no console output
-    return build_enhanced_featured_college_df(earnings_ceiling=earnings_ceiling)
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def load_enhanced_data(earnings_ceiling=30000.0, zip_code=None, max_distance=None):
+    """
+    Load and cache enhanced college data.
+    
+    Args:
+        earnings_ceiling: Maximum earnings value to include
+        zip_code: Optional zip code for distance filtering (part of cache key)
+        max_distance: Optional max distance in miles (part of cache key)
+    """
+    # Load the data
+    df = build_enhanced_featured_college_df(earnings_ceiling=earnings_ceiling)
+    
+    # Add distance column if zip code is provided
+    if zip_code and max_distance:
+        from src.distance_utils import add_distance_column
+        df = add_distance_column(df, zip_code)
+        df = df[df['distance_miles'] <= max_distance]
+        
+    return df
 
 
 @st.cache_data
@@ -1414,11 +1429,9 @@ def build_profile_from_data(profile_data):
         'home_state': profile_data.get('home_state'),
         'in_state_only': profile_data.get('in_state_only', False),
         'preferred_states': profile_data.get('preferred_states', []),
-        home_state=profile_data.get('home_state'),
-        in_state_only=profile_data.get('in_state_only', False),
-        preferred_states=profile_data.get('preferred_states', []),
-        zip_code=profile_data.get('zip_code'),
-        max_distance_from_home=profile_data.get('max_distance_from_home'),
+        'zip_code': profile_data.get('zip_code'),
+        'max_distance_from_home': profile_data.get('max_distance_from_home'),
+        'max_distance_from_home': profile_data.get('max_distance_from_home'),
 
         # Environment
         'urbanization_pref': profile_data.get('urbanization_pref', 'no_preference'),

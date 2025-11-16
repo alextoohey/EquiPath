@@ -184,6 +184,24 @@ def render_profile_editor():
                 key="edit_preferred_states"
             )
             data['preferred_states'] = [s.strip().upper() for s in preferred.split(',') if s.strip()] if preferred else []
+            
+            # Add zip code for distance-based filtering
+            zip_code = st.text_input(
+                "ZIP Code (for distance filtering)",
+                value=data.get('zip_code', ''),
+                key="edit_zip_code"
+            )
+            data['zip_code'] = zip_code if zip_code.strip() else None
+            
+            if data['zip_code']:
+                data['max_distance_from_home'] = st.slider(
+                    "Maximum distance from home (miles)",
+                    min_value=10,
+                    max_value=500,
+                    value=int(data.get('max_distance_from_home', 100)) if data.get('max_distance_from_home') else 100,
+                    step=10,
+                    key="edit_max_distance"
+                )
 
     # Environment Preferences
     with st.expander("🏫 Environment Preferences"):
