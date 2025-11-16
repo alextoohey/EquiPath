@@ -268,12 +268,16 @@ def add_access_score(df):
     return df
 
 
-def build_featured_college_df(data_dir='data', force_reload=False):
+def build_featured_college_df(data_dir='data', force_reload=False, earnings_ceiling=30000.0):
     """
     Main function to build the featured college DataFrame.
 
     Loads merged data and applies all feature engineering functions.
     Uses Parquet caching for instant loading after first run.
+
+    IMPORTANT: Since the affordability data has multiple rows per institution
+    (one for each earnings ceiling), we filter to a specific earnings ceiling
+    to get one row per institution for feature engineering.
 
     Parameters:
     -----------
@@ -281,11 +285,17 @@ def build_featured_college_df(data_dir='data', force_reload=False):
         Directory containing the data files
     force_reload : bool
         If True, rebuild features from scratch instead of using cache
+    earnings_ceiling : float
+        Which earnings ceiling scenario to use for affordability metrics.
+        Default: 30000.0 (lowest income bracket)
+        Valid values: 30000.0, 48000.0, 75000.0, 110000.0, 150000.0
+        Each represents the upper bound of the student family earnings bracket.
 
     Returns:
     --------
     pd.DataFrame
-        Fully featured DataFrame with all computed metrics
+        Fully featured DataFrame with all computed metrics.
+        One row per institution.
     """
     # Check for cached featured data
     from src.data_loading import _get_cache_dir
@@ -306,7 +316,7 @@ def build_featured_college_df(data_dir='data', force_reload=False):
     print("="*60)
 
     # Load merged data using UNITID join (recommended for better matching)
-    df = load_merged_data(data_dir=data_dir, join_key='UNITID', force_reload=force_reload)
+    df = load_merged_data(data_dir=data_dir, join_key='UNITID', force_reload=force_reload, earnings_ceiling=earnings_ceiling)
 
     print(f"\nStarting with {len(df)} institutions")
     print(f"Starting with {len(df.columns)} columns")

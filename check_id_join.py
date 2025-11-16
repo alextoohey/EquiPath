@@ -77,6 +77,8 @@ print(f"  Unique institutions in merge: {merged_on_name['Institution Name'].nuni
 # Check for duplicates
 print(f"\n{'-'*80}")
 print(f"Duplicate analysis:")
+print(f"NOTE: Duplicates are EXPECTED because Affordability Gap has multiple rows")
+print(f"      per institution (one for each Student Family Earnings Ceiling scenario)")
 print(f"  Duplicates in ID-based merge: {merged_on_id.duplicated(subset=[cr_id_col]).sum()}")
 print(f"  Duplicates in name-based merge: {merged_on_name.duplicated(subset=['Institution Name']).sum()}")
 
