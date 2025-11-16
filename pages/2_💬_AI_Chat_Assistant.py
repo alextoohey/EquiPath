@@ -285,6 +285,31 @@ Use defaults for missing info: race="OTHER", is_parent=false, first_gen=false, b
 
                             profile_dict = json.loads(content)
                             st.session_state.profile_data = profile_dict
+
+                            # Add confirmation message with audio
+                            confirmation_msg = "Got it! Here are your results."
+                            confirmation_audio = None
+
+                            # Generate audio for confirmation
+                            eleven_api_key = os.getenv("ELEVENLABS_API_KEY")
+                            if eleven_api_key:
+                                try:
+                                    eleven_client = ElevenLabs(api_key=eleven_api_key)
+                                    audio_generator = eleven_client.text_to_speech.convert(
+                                        voice_id="pNInz6obpgDQGcFmaJgB",
+                                        text=confirmation_msg,
+                                        model_id="eleven_turbo_v2_5"
+                                    )
+                                    confirmation_audio = b"".join(audio_generator)
+                                except:
+                                    pass
+
+                            st.session_state.chat_messages.append({
+                                "role": "assistant",
+                                "content": confirmation_msg,
+                                "audio": confirmation_audio
+                            })
+
                             # Skip to end
                             st.session_state.chat_step = 999
                             st.rerun()
