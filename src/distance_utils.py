@@ -33,8 +33,12 @@ def _get_nomi():
         return _nomi
 
     _nomi_initialized = True
-    if PGEOCODE_AVAILABLE and not USZIPCODE_AVAILABLE:
+    if PGEOCODE_AVAILABLE:
         try:
+            # Fix SSL certificate issue by using certifi
+            import ssl
+            import certifi
+            ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
             _nomi = pgeocode.Nominatim('us')
         except Exception as e:
             print(f"Warning: Could not initialize pgeocode: {e}")
@@ -102,7 +106,17 @@ def get_zip_coordinates(zip_code: str) -> Optional[Tuple[float, float]]:
     ...     print(f"Coordinates: {lat:.2f}, {lon:.2f}")
     Coordinates: 40.75, -73.99
     """
-    # Try uszipcode first
+    # Try pgeocode first (more reliable with our SSL fix)
+    nomi = _get_nomi()
+    if nomi is not None:
+        try:
+            result = nomi.query_postal_code(zip_code)
+            if result is not None and not pd.isna(result.latitude) and not pd.isna(result.longitude):
+                return (float(result.latitude), float(result.longitude))
+        except Exception as e:
+            print(f"pgeocode error for {zip_code}: {e}")
+
+    # Fallback to uszipcode if pgeocode fails
     if USZIPCODE_AVAILABLE:
         try:
             search = SearchEngine()
@@ -112,16 +126,6 @@ def get_zip_coordinates(zip_code: str) -> Optional[Tuple[float, float]]:
                 return (zipcode.lat, zipcode.lng)
         except Exception as e:
             print(f"uszipcode error for {zip_code}: {e}")
-
-    # Fallback to pgeocode
-    nomi = _get_nomi()
-    if nomi is not None:
-        try:
-            result = nomi.query_postal_code(zip_code)
-            if result is not None and not pd.isna(result.latitude) and not pd.isna(result.longitude):
-                return (float(result.latitude), float(result.longitude))
-        except Exception as e:
-            print(f"pgeocode error for {zip_code}: {e}")
 
     print(f"Warning: Could not find coordinates for zip code {zip_code}")
     return None

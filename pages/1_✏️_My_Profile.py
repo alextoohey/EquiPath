@@ -144,6 +144,9 @@ def main():
                     )
                     recommendations = rank_colleges_for_user(colleges_df, profile, top_k=top_k)
 
+                    # Store in session state so it persists across reruns
+                    st.session_state.current_recommendations = recommendations
+
                 if len(recommendations) == 0:
                     st.error("❌ No colleges match your criteria. Try adjusting your filters in your profile.")
                 else:
@@ -260,33 +263,53 @@ def main():
                                     ratio = earnings / debt
                                     st.write(f"**Earnings/Debt Ratio:** {ratio:.1f}x")
 
-                    # Visualization
-                    st.divider()
-                    st.subheader("📈 Visual Comparison of Your Matches")
-
-                    fig = px.scatter(
-                        recommendations.head(10),
-                        x='personalized_affordability',
-                        y='personalized_equity',
-                        size='roi_score',
-                        color='composite_score',
-                        hover_name='Institution Name' if 'Institution Name' in recommendations.columns else 'INSTNM',
-                        labels={
-                            'personalized_affordability': 'Affordability',
-                            'personalized_equity': 'Equity',
-                            'composite_score': 'Match Score',
-                            'roi_score': 'ROI'
-                        },
-                        title="Affordability vs. Equity (bubble size = ROI)",
-                        color_continuous_scale='Viridis'
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
+                    # Visualization and map button will be shown below (outside button click)
 
             except ValueError as e:
                 st.error(f"❌ Error: {str(e)}")
             except Exception as e:
                 st.error(f"❌ An unexpected error occurred: {str(e)}")
                 st.exception(e)
+
+        # Display stored recommendations if they exist (outside the button click)
+        if 'current_recommendations' in st.session_state and st.session_state.current_recommendations is not None:
+            recommendations = st.session_state.current_recommendations
+
+            if len(recommendations) > 0:
+                # Show the visualization and map button
+                st.divider()
+                st.subheader("📈 Visual Comparison of Your Matches")
+
+                fig = px.scatter(
+                    recommendations.head(10),
+                    x='personalized_affordability',
+                    y='personalized_equity',
+                    size='roi_score',
+                    color='composite_score',
+                    hover_name='Institution Name' if 'Institution Name' in recommendations.columns else 'INSTNM',
+                    labels={
+                        'personalized_affordability': 'Affordability',
+                        'personalized_equity': 'Equity',
+                        'composite_score': 'Match Score',
+                        'roi_score': 'ROI'
+                    },
+                    title="Affordability vs. Equity (bubble size = ROI)",
+                    color_continuous_scale='Viridis'
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Add "View on Map" button
+                st.divider()
+                col1, col2, col3 = st.columns([1, 2, 1])
+                with col2:
+                    if st.button("🗺️ View Recommended Colleges on Map",
+                               use_container_width=True,
+                               type="primary",
+                               key="view_recommendations_on_map"):
+                        # Store recommendations in session state for map page
+                        st.session_state.recommended_colleges = recommendations
+                        st.session_state.show_only_recommended = True
+                        st.switch_page("pages/3_🗺️_School_Map.py")
 
     # Info box at bottom
     if mode == "View/Edit Profile":
