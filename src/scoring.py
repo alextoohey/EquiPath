@@ -12,6 +12,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.user_profile import UserProfile
+from src.distance_utils import filter_by_radius, add_distance_column
 
 
 def choose_weights(profile: UserProfile) -> dict:
@@ -125,6 +126,15 @@ def filter_colleges_for_user(df: pd.DataFrame, profile: UserProfile) -> pd.DataF
             # Convert to string and filter
             filtered = filtered[filtered[size_col].astype(str).str.contains(profile.school_size_pref, case=False, na=False)]
             print(f"  Size filter ({profile.school_size_pref}): {len(filtered)} institutions")
+
+    # Filter by zip code radius (if specified)
+    if profile.zip_code and profile.radius_miles:
+        print(f"  Applying radius filter: {profile.radius_miles} miles from zip {profile.zip_code}")
+        filtered = filter_by_radius(filtered, profile.zip_code, profile.radius_miles)
+        print(f"  Radius filter: {len(filtered)} institutions within {profile.radius_miles} miles")
+    elif profile.zip_code:
+        # Add distance column even if not filtering
+        filtered = add_distance_column(filtered, profile.zip_code)
 
     print(f"  Final filtered set: {len(filtered)} institutions")
     return filtered

@@ -38,6 +38,10 @@ class UserProfile:
         Preferred school size. Options: "Small", "Medium", "Large", None
     intended_field : Optional[str]
         Intended field of study (optional, for future enhancement)
+    zip_code : Optional[str]
+        Student's zip code (5-digit string, for distance filtering)
+    radius_miles : Optional[int]
+        Maximum distance in miles from zip code (requires zip_code to be set)
     """
     race: Literal["BLACK", "HISPANIC", "WHITE", "ASIAN", "NATIVE", "PACIFIC", "OTHER"]
     is_parent: bool
@@ -53,6 +57,8 @@ class UserProfile:
     public_only: bool = False
     school_size_pref: Optional[str] = None
     intended_field: Optional[str] = None
+    zip_code: Optional[str] = None
+    radius_miles: Optional[int] = None
 
     def __post_init__(self):
         """Validate profile after initialization."""
@@ -68,8 +74,31 @@ class UserProfile:
         if self.in_state_only and not self.state:
             raise ValueError("state must be provided if in_state_only is True")
 
+        # Validate zip code format (if provided)
+        if self.zip_code is not None:
+            # Remove any non-digit characters and validate length
+            zip_digits = ''.join(filter(str.isdigit, self.zip_code))
+            if len(zip_digits) != 5:
+                raise ValueError(f"zip_code must be a 5-digit string, got {self.zip_code}")
+            self.zip_code = zip_digits  # Normalize to digits only
+
+        # Validate radius requirement
+        if self.radius_miles is not None:
+            if not self.zip_code:
+                raise ValueError("zip_code must be provided if radius_miles is set")
+            if self.radius_miles <= 0:
+                raise ValueError(f"radius_miles must be positive, got {self.radius_miles}")
+
     def __str__(self):
         """String representation of the user profile."""
+        location_info = []
+        if self.state:
+            location_info.append(f"State: {self.state}")
+        if self.zip_code:
+            location_info.append(f"Zip Code: {self.zip_code}")
+        if self.radius_miles:
+            location_info.append(f"Radius: {self.radius_miles} miles")
+
         return f"""
 UserProfile:
   Race/Ethnicity: {self.race}
@@ -79,7 +108,7 @@ UserProfile:
   Income Bracket: {self.income_bracket}
   GPA: {self.gpa}
   In-State Only: {self.in_state_only}
-  {f'State: {self.state}' if self.state else ''}
+  {', '.join(location_info) if location_info else 'Location: Not specified'}
   Public Only: {self.public_only}
   School Size Preference: {self.school_size_pref or 'Any'}
   Intended Field: {self.intended_field or 'Undecided'}

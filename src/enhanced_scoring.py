@@ -19,6 +19,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.enhanced_user_profile import EnhancedUserProfile
+from src.distance_utils import filter_by_radius, add_distance_column
 
 
 def get_personalized_weights(profile: EnhancedUserProfile) -> dict:
@@ -243,6 +244,15 @@ def filter_colleges_for_user(df: pd.DataFrame, profile: EnhancedUserProfile) -> 
         if grad_col in filtered.columns:
             filtered = filtered[pd.to_numeric(filtered[grad_col], errors='coerce') >= profile.min_graduation_rate]
             print(f"  After min graduation rate filter (>={profile.min_graduation_rate}%): {len(filtered)} institutions")
+
+    # 11. ZIP CODE RADIUS FILTER
+    if profile.zip_code and profile.max_distance_from_home:
+        print(f"  Applying radius filter: {profile.max_distance_from_home} miles from zip {profile.zip_code}")
+        filtered = filter_by_radius(filtered, profile.zip_code, profile.max_distance_from_home)
+        print(f"  After radius filter: {len(filtered)} institutions within {profile.max_distance_from_home} miles")
+    elif profile.zip_code:
+        # Add distance column even if not filtering
+        filtered = add_distance_column(filtered, profile.zip_code)
 
     print(f"\n✓ Final filtered set: {len(filtered)} institutions")
     print("="*60)
