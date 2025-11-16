@@ -6,6 +6,7 @@ Allows students to create profiles conversationally and get detailed AI explanat
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import json
 import sys
 import os
@@ -19,6 +20,7 @@ from src.user_profile import UserProfile
 from src.scoring import rank_colleges_for_user, choose_weights
 from src.llm_integration import parse_user_text_to_profile, generate_explanations, build_recommendation_summary
 from src.config import get_anthropic_api_key  # Load API key from .env
+from src.data_loading import load_merged_data
 
 # Import Anthropic
 try:
@@ -49,6 +51,355 @@ def load_data():
     df = build_featured_college_df()
     df_clustered, centroids, labels = add_clusters(df, n_clusters=5)
     return df_clustered, centroids, labels
+
+
+@st.cache_data
+def load_pathway_data():
+    """Load merged data for pathway analysis (includes transfer rates)."""
+    return load_merged_data()
+
+
+def analyze_pathway_options(profile, df_merged):
+    """
+    Analyze community college transfer pathway vs direct 4-year enrollment.
+
+    Args:
+        profile: UserProfile with student information
+        df_merged: DataFrame with merged college and affordability data
+
+    Returns:
+        dict with pathway analysis results
+    """
+    # Filter by state if specified
+    if profile.state and profile.in_state_only:
+        df_filtered = df_merged[df_merged['State of Institution'] == profile.state].copy()
+    else:
+        df_filtered = df_merged.copy()
+
+    # Filter by zip code radius BEFORE income filtering
+    if profile.zip_code and profile.radius_miles:
+        from src.distance_utils import filter_by_radius
+        print(f"  [Pathway] Applying radius filter: {profile.radius_miles} miles from zip {profile.zip_code}")
+        df_filtered = filter_by_radius(df_filtered, profile.zip_code, profile.radius_miles)
+        print(f"  [Pathway] After radius filter: {len(df_filtered)} institutions")
+    elif profile.zip_code:
+        from src.distance_utils import add_distance_column
+        df_filtered = add_distance_column(df_filtered, profile.zip_code)
+
+    # Filter by income bracket if available
+    # Note: The affordability gap data is mostly for low-income ($30k ceiling)
+    # For pathway analysis, we'll use the most complete dataset (30k) since
+    # it has the most community colleges and public universities
+    if 'Student Family Earnings Ceiling' in df_filtered.columns:
+        # Try to use 30k data (most complete) first
+        df_income = df_filtered[df_filtered['Student Family Earnings Ceiling'] == 30000].copy()
+
+        # If still not enough community colleges, don't filter by income
+        cc_test = df_income[df_income['Sector Name'] == 'Public, 2-year']
+        if len(cc_test) < 10:
+            df_income = df_filtered
+    else:
+        df_income = df_filtered
+
+    # Separate by sector (use 'Sector Name' column which has the text values)
+    cc = df_income[df_income['Sector Name'] == 'Public, 2-year'].copy()
+    pub = df_income[df_income['Sector Name'] == 'Public, 4-year or above'].copy()
+    priv = df_income[df_income['Sector Name'] == 'Private not-for-profit, 4-year or above'].copy()
+
+    if len(cc) == 0 or len(pub) == 0:
+        return None
+
+    # Identify high-transfer community colleges
+    HIGH_TRANSFER_THRESHOLD = 9
+    cc_high_transfer = cc[
+        (cc['Transfer Out Rate'].notna()) &
+        (cc['Transfer Out Rate'] >= HIGH_TRANSFER_THRESHOLD)
+    ].copy()
+
+    # Use high-transfer CCs if available
+    if len(cc_high_transfer) >= 5:
+        cc_for_path = cc_high_transfer
+        using_transfer_filter = True
+    else:
+        cc_for_path = cc
+        using_transfer_filter = False
+
+    # Calculate pathway costs and outcomes
+    cc_price = cc_for_path['Net Price'].median()
+    cc_debt = cc['Median Debt of Completers'].median()
+    cc_earnings = cc['Median Earnings of Students Working and Not Enrolled 10 Years After Entry'].median()
+
+    pub_price = pub['Net Price'].median()
+    pub_debt = pub['Median Debt of Completers'].median()
+    pub_earnings = pub['Median Earnings of Students Working and Not Enrolled 10 Years After Entry'].median()
+
+    priv_price = priv['Net Price'].median() if len(priv) > 0 else 0
+    priv_debt = priv['Median Debt of Completers'].median() if len(priv) > 0 else 0
+    priv_earnings = priv['Median Earnings of Students Working and Not Enrolled 10 Years After Entry'].median() if len(priv) > 0 else 0
+
+    # Path A: Community College (2yr) → Public University (2yr)
+    path_a_cost = (cc_price * 2) + (pub_price * 2)
+    path_a_investment = path_a_cost + pub_debt
+    path_a_value = (pub_earnings * 10) - path_a_investment
+    path_a_break_even = path_a_investment / pub_earnings if pub_earnings > 0 else 0
+
+    # Path B: Direct Public University (4yr)
+    path_b_cost = pub_price * 4
+    path_b_investment = path_b_cost + pub_debt
+    path_b_value = (pub_earnings * 10) - path_b_investment
+    path_b_break_even = path_b_investment / pub_earnings if pub_earnings > 0 else 0
+
+    # Path C: Direct Private University (4yr)
+    path_c_cost = priv_price * 4
+    path_c_investment = path_c_cost + priv_debt
+    path_c_value = (priv_earnings * 10) - path_c_investment
+    path_c_break_even = path_c_investment / priv_earnings if priv_earnings > 0 else 0
+
+    # Get top schools (use Institution Name_CR from College Results dataset)
+    top_cc = cc_for_path.nsmallest(5, 'Net Price')[['Institution Name_CR', 'City', 'Net Price', 'Transfer Out Rate']].copy()
+    top_pub = pub.nsmallest(5, 'Net Price')[['Institution Name_CR', 'City', 'Net Price']].copy()
+
+    # Get best transfer community colleges
+    if len(cc) > 0 and cc['Transfer Out Rate'].notna().sum() > 0:
+        cc_with_transfer = cc[cc['Transfer Out Rate'].notna()].copy()
+        best_transfer_cc = cc_with_transfer.nlargest(min(10, len(cc_with_transfer)), 'Transfer Out Rate')[[
+            'Institution Name_CR', 'City', 'Transfer Out Rate', 'Net Price'
+        ]].copy()
+    else:
+        best_transfer_cc = None
+
+    return {
+        'path_a': {
+            'cost': path_a_cost,
+            'debt': pub_debt,
+            'investment': path_a_investment,
+            'value': path_a_value,
+            'earnings': pub_earnings,
+            'break_even': path_a_break_even
+        },
+        'path_b': {
+            'cost': path_b_cost,
+            'debt': pub_debt,
+            'investment': path_b_investment,
+            'value': path_b_value,
+            'earnings': pub_earnings,
+            'break_even': path_b_break_even
+        },
+        'path_c': {
+            'cost': path_c_cost,
+            'debt': priv_debt,
+            'investment': path_c_investment,
+            'value': path_c_value,
+            'earnings': priv_earnings,
+            'break_even': path_c_break_even
+        },
+        'using_transfer_filter': using_transfer_filter,
+        'high_transfer_count': len(cc_for_path) if using_transfer_filter else 0,
+        'avg_transfer_rate': cc_for_path['Transfer Out Rate'].mean() if using_transfer_filter else 0,
+        'top_cc': top_cc,
+        'top_pub': top_pub,
+        'best_transfer_cc': best_transfer_cc,
+        'cc_count': len(cc),
+        'pub_count': len(pub),
+        'priv_count': len(priv),
+        'savings': path_b_cost - path_a_cost
+    }
+
+
+def display_pathway_comparison(pathway_results):
+    """Display pathway comparison results with visualizations."""
+    if not pathway_results:
+        st.warning("Not enough data available for pathway comparison. Try expanding your search area.")
+        return
+
+    st.header("🛤️ Your Pathway Options")
+
+    # Display institution counts
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Community Colleges", pathway_results['cc_count'])
+    with col2:
+        st.metric("Public Universities", pathway_results['pub_count'])
+    with col3:
+        st.metric("Private Universities", pathway_results['priv_count'])
+
+    st.info("""
+    📊 **About This Data:**
+    - **Net prices** are specific to your income bracket and include financial aid
+    - **Earnings** represent graduates 10 years after enrollment
+    - **Path A earnings** use public university data since transfer students graduate with the same degree
+    - All dollar amounts are medians (middle values)
+    """)
+
+    # Display pathways in tabs
+    tab1, tab2, tab3 = st.tabs(["Path A: CC → Public", "Path B: Direct Public", "Path C: Direct Private"])
+
+    with tab1:
+        st.subheader("🎓 Community College (2yr) → Public University (2yr)")
+
+        if pathway_results['using_transfer_filter']:
+            st.success(f"""
+            ✅ **Using High-Transfer Community Colleges**
+            - {pathway_results['high_transfer_count']} colleges with ≥9% transfer rate
+            - Average transfer rate: {pathway_results['avg_transfer_rate']:.1f}%
+            - These CCs have strong track records of preparing students for 4-year universities
+            """)
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total 4-Year Cost", f"${pathway_results['path_a']['cost']:,.0f}")
+        with col2:
+            st.metric("Expected Debt", f"${pathway_results['path_a']['debt']:,.0f}")
+        with col3:
+            st.metric("Annual Earnings (10yr)", f"${pathway_results['path_a']['earnings']:,.0f}")
+        with col4:
+            st.metric("Net 10-Year Value", f"${pathway_results['path_a']['value']:,.0f}")
+
+        st.info(f"⏱️ **Break Even Time:** {pathway_results['path_a']['break_even']:.1f} years")
+
+    with tab2:
+        st.subheader("🎓 Public University (4 years)")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total 4-Year Cost", f"${pathway_results['path_b']['cost']:,.0f}")
+        with col2:
+            st.metric("Expected Debt", f"${pathway_results['path_b']['debt']:,.0f}")
+        with col3:
+            st.metric("Annual Earnings (10yr)", f"${pathway_results['path_b']['earnings']:,.0f}")
+        with col4:
+            st.metric("Net 10-Year Value", f"${pathway_results['path_b']['value']:,.0f}")
+
+        st.info(f"⏱️ **Break Even Time:** {pathway_results['path_b']['break_even']:.1f} years")
+
+    with tab3:
+        if pathway_results['priv_count'] > 0:
+            st.subheader("🎓 Private University (4 years)")
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total 4-Year Cost", f"${pathway_results['path_c']['cost']:,.0f}")
+            with col2:
+                st.metric("Expected Debt", f"${pathway_results['path_c']['debt']:,.0f}")
+            with col3:
+                st.metric("Annual Earnings (10yr)", f"${pathway_results['path_c']['earnings']:,.0f}")
+            with col4:
+                st.metric("Net 10-Year Value", f"${pathway_results['path_c']['value']:,.0f}")
+
+            st.info(f"⏱️ **Break Even Time:** {pathway_results['path_c']['break_even']:.1f} years")
+        else:
+            st.warning("No private universities available in this area.")
+
+    # Comparison chart
+    st.subheader("📊 Side-by-Side Comparison")
+
+    comparison_data = {
+        'Pathway': ['A: CC→Public', 'B: Direct Public', 'C: Direct Private'],
+        'Total Cost': [
+            pathway_results['path_a']['cost'],
+            pathway_results['path_b']['cost'],
+            pathway_results['path_c']['cost']
+        ],
+        'Expected Debt': [
+            pathway_results['path_a']['debt'],
+            pathway_results['path_b']['debt'],
+            pathway_results['path_c']['debt']
+        ],
+        '10-Year Net Value': [
+            pathway_results['path_a']['value'],
+            pathway_results['path_b']['value'],
+            pathway_results['path_c']['value']
+        ]
+    }
+
+    comparison_df = pd.DataFrame(comparison_data)
+
+    # Display as table
+    st.dataframe(
+        comparison_df.style.format({
+            'Total Cost': '${:,.0f}',
+            'Expected Debt': '${:,.0f}',
+            '10-Year Net Value': '${:,.0f}'
+        }),
+        use_container_width=True
+    )
+
+    # Bar chart comparison
+    fig = go.Figure(data=[
+        go.Bar(name='Total 4-Year Cost', x=comparison_df['Pathway'], y=comparison_df['Total Cost']),
+        go.Bar(name='Expected Debt', x=comparison_df['Pathway'], y=comparison_df['Expected Debt'])
+    ])
+
+    fig.update_layout(
+        title='Cost and Debt Comparison',
+        barmode='group',
+        yaxis_title='Amount ($)',
+        height=400
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Recommendation
+    st.subheader("💡 Our Recommendation")
+    best_idx = comparison_df['10-Year Net Value'].idxmax()
+    best_path = comparison_df.loc[best_idx]
+
+    st.success(f"""
+    **✅ We recommend: {best_path['Pathway']}**
+
+    - Best 10-year net value: **${best_path['10-Year Net Value']:,.0f}**
+    - Path A saves you **${pathway_results['savings']:,.0f}** compared to going straight to a 4-year university
+    - You'll break even in just **{pathway_results['path_a']['break_even']:.1f} years**!
+    """)
+
+    # Top schools
+    st.subheader("🏫 Top Affordable Schools")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("**Community Colleges**")
+        if not pathway_results['top_cc'].empty:
+            top_cc_display = pathway_results['top_cc'].copy()
+            top_cc_display.columns = ['Institution', 'City', 'Net Price/Year', 'Transfer Rate']
+            st.dataframe(
+                top_cc_display.style.format({
+                    'Net Price/Year': '${:,.0f}',
+                    'Transfer Rate': '{:.0f}%'
+                }),
+                hide_index=True,
+                use_container_width=True
+            )
+
+    with col2:
+        st.markdown("**Public Universities**")
+        if not pathway_results['top_pub'].empty:
+            top_pub_display = pathway_results['top_pub'].copy()
+            top_pub_display.columns = ['Institution', 'City', 'Net Price/Year']
+            st.dataframe(
+                top_pub_display.style.format({
+                    'Net Price/Year': '${:,.0f}'
+                }),
+                hide_index=True,
+                use_container_width=True
+            )
+
+    # Best Community Colleges for Transfer
+    if pathway_results['best_transfer_cc'] is not None and not pathway_results['best_transfer_cc'].empty:
+        st.subheader("🔄 Best Community Colleges for Transferring")
+        st.markdown("""
+        These community colleges have the **highest transfer-out rates**, meaning more students
+        successfully transfer to 4-year universities. Perfect for Path A!
+        """)
+
+        best_transfer_display = pathway_results['best_transfer_cc'].copy()
+        best_transfer_display.columns = ['Institution', 'City', 'Transfer Rate', 'Net Price/Year']
+        st.dataframe(
+            best_transfer_display.style.format({
+                'Transfer Rate': '{:.0f}%',
+                'Net Price/Year': '${:,.0f}'
+            }),
+            hide_index=True,
+            use_container_width=True
+        )
 
 
 def get_anthropic_client():
@@ -85,7 +436,9 @@ def chat_collect_profile():
         "Which state are you from? (Enter 2-letter state code like CA, NY, TX, etc.)",
         "Do you want to only consider colleges in your home state? (yes/no)",
         "Do you prefer public schools only? (yes/no)",
-        "What school size do you prefer? (Small, Medium, Large, or 'any' if no preference)"
+        "What school size do you prefer? (Small, Medium, Large, or 'any' if no preference)",
+        "Do you want to search for colleges near you? Enter your 5-digit zip code, or type 'skip' to search all locations:",
+        "How many miles away are you willing to travel for college? (e.g., 50, 100, 200, or 'any' for no limit)"
     ]
 
     # Display chat history
@@ -181,6 +534,32 @@ def chat_collect_profile():
                 elif 'large' in size_input:
                     size = 'Large'
                 st.session_state.profile_data['school_size_pref'] = size
+            elif step == 11:  # Zip code
+                zip_input = user_input.strip().lower()
+                if zip_input == 'skip' or zip_input == '':
+                    st.session_state.profile_data['zip_code'] = None
+                else:
+                    # Extract digits only
+                    zip_digits = ''.join(filter(str.isdigit, user_input))
+                    if len(zip_digits) == 5:
+                        st.session_state.profile_data['zip_code'] = zip_digits
+                    else:
+                        st.session_state.profile_data['zip_code'] = None
+            elif step == 12:  # Radius
+                # Only ask radius if zip code was provided
+                if st.session_state.profile_data.get('zip_code'):
+                    radius_input = user_input.strip().lower()
+                    if radius_input == 'any' or radius_input == 'skip' or radius_input == '':
+                        st.session_state.profile_data['radius_miles'] = None
+                    else:
+                        try:
+                            radius = int(''.join(filter(str.isdigit, user_input)))
+                            st.session_state.profile_data['radius_miles'] = radius if radius > 0 else None
+                        except:
+                            st.session_state.profile_data['radius_miles'] = None
+                else:
+                    # Skip radius question if no zip code
+                    st.session_state.profile_data['radius_miles'] = None
 
             st.session_state.chat_step += 1
             st.rerun()
@@ -201,7 +580,9 @@ def chat_collect_profile():
                 in_state_only=st.session_state.profile_data.get('in_state_only', False),
                 state=st.session_state.profile_data.get('state'),
                 public_only=st.session_state.profile_data.get('public_only', False),
-                school_size_pref=st.session_state.profile_data.get('school_size_pref')
+                school_size_pref=st.session_state.profile_data.get('school_size_pref'),
+                zip_code=st.session_state.profile_data.get('zip_code'),
+                radius_miles=st.session_state.profile_data.get('radius_miles')
             )
 
             # Save profile to session state for persistence
@@ -315,7 +696,8 @@ def main():
 
     # Load data
     with st.spinner("Loading college data..."):
-        df, centroids, cluster_labels = load_data()
+        df, _, _ = load_data()
+        df_merged = load_pathway_data()
 
     client = get_anthropic_client()
 
@@ -349,9 +731,26 @@ def main():
                     public_only = st.checkbox("Only show public schools")
                     school_size = st.selectbox("Preferred School Size", ["Any", "Small", "Medium", "Large"], index=0)
 
+                st.markdown("**Location Preferences (Optional)**")
+                col3, col4 = st.columns(2)
+                with col3:
+                    zip_code_input = st.text_input("Your Zip Code (5 digits)", placeholder="90210", help="Leave blank to search all locations")
+                with col4:
+                    radius = st.number_input("Max Distance (miles)", min_value=0, value=0, step=10, help="0 = no limit")
+
                 submitted = st.form_submit_button("Find My Matches")
 
                 if submitted:
+                    # Process zip code
+                    zip_code = None
+                    if zip_code_input:
+                        zip_digits = ''.join(filter(str.isdigit, zip_code_input))
+                        if len(zip_digits) == 5:
+                            zip_code = zip_digits
+
+                    # Process radius
+                    radius_miles = radius if radius > 0 and zip_code else None
+
                     profile = UserProfile(
                         race=race,
                         is_parent=is_parent,
@@ -362,7 +761,9 @@ def main():
                         in_state_only=in_state_only,
                         state=state if state else None,
                         public_only=public_only,
-                        school_size_pref=school_size if school_size != "Any" else None
+                        school_size_pref=school_size if school_size != "Any" else None,
+                        zip_code=zip_code,
+                        radius_miles=radius_miles
                     )
                     # Save profile to session state for persistence
                     st.session_state.saved_profile = profile
@@ -428,6 +829,9 @@ def main():
                     with col_a:
                         st.markdown("**📍 Location & Type**")
                         st.write(f"State: {row.get('State of Institution', 'N/A')}")
+                        # Show distance if available
+                        if 'distance_miles' in row.index and pd.notna(row['distance_miles']):
+                            st.write(f"Distance: {row['distance_miles']:.1f} miles from you")
                         st.write(f"Sector: {row.get('Sector of Institution', 'N/A')}")
                         st.write(f"Archetype: {row.get('cluster_label', 'N/A')}")
 
@@ -454,21 +858,62 @@ def main():
             st.divider()
             st.subheader("📈 Visual Comparison")
 
-            fig = px.scatter(
-                recommendations.head(10),
-                x='afford_score_std',
-                y='equity_parity',
-                size='roi_score',
-                color='user_score',
-                hover_name='Institution Name',
-                labels={
-                    'afford_score_std': 'Affordability',
-                    'equity_parity': 'Equity',
-                    'user_score': 'Match Score'
-                },
-                title="Affordability vs. Equity"
-            )
+            # Prepare data for visualization with fallback columns
+            viz_data = recommendations.head(10).copy()
+
+            # Determine which columns to use based on availability
+            x_col = 'afford_score_std' if 'afford_score_std' in viz_data.columns else 'afford_score_parent'
+            y_col = 'equity_parity' if 'equity_parity' in viz_data.columns else 'user_score'
+            size_col = 'roi_score' if 'roi_score' in viz_data.columns else None
+
+            # Create scatter plot
+            if size_col and size_col in viz_data.columns:
+                fig = px.scatter(
+                    viz_data,
+                    x=x_col,
+                    y=y_col,
+                    size=size_col,
+                    color='user_score',
+                    hover_name='Institution Name',
+                    labels={
+                        x_col: 'Affordability',
+                        y_col: 'Equity',
+                        'user_score': 'Match Score'
+                    },
+                    title="Affordability vs. Equity"
+                )
+            else:
+                # Fallback without size parameter
+                fig = px.scatter(
+                    viz_data,
+                    x=x_col,
+                    y=y_col,
+                    color='user_score',
+                    hover_name='Institution Name',
+                    labels={
+                        x_col: 'Affordability',
+                        y_col: 'Equity',
+                        'user_score': 'Match Score'
+                    },
+                    title="Affordability vs. Equity"
+                )
             st.plotly_chart(fig, use_container_width=True)
+
+            # Community College Pathway Comparison
+            st.divider()
+            st.subheader("🔄 Community College Transfer Pathway")
+            st.markdown("""
+            Interested in starting at a community college and transferring to a 4-year university?
+            This can be a great way to save money while still earning the same degree!
+            """)
+
+            if st.button("📊 Compare Community College vs. Direct 4-Year Paths", type="primary"):
+                st.session_state.show_pathway = True
+
+            if st.session_state.get('show_pathway', False):
+                with st.spinner("Analyzing pathway options..."):
+                    pathway_results = analyze_pathway_options(profile, df_merged)
+                    display_pathway_comparison(pathway_results)
 
             # Add conversational Q&A chatbot
             st.divider()
