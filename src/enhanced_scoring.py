@@ -118,10 +118,14 @@ def filter_colleges_for_user(df: pd.DataFrame, profile: EnhancedUserProfile) -> 
     # 4. GEOGRAPHIC FILTERS
     state_col = 'State of Institution'
 
-    # In-state only
+    # In-state only - only apply if both in_state_only AND home_state are set
     if profile.in_state_only and profile.home_state and state_col in filtered.columns:
         filtered = filtered[filtered[state_col].astype(str).str.upper() == profile.home_state.upper()]
         print(f"  After in-state filter ({profile.home_state}): {len(filtered)} institutions")
+    elif profile.in_state_only and not profile.home_state:
+        # Invalid state: in-state preference set but no home state specified
+        # Ignore the in-state preference in this case
+        print("  Warning: In-state preference set but no home state specified - ignoring in-state filter")
 
     # Preferred states
     elif profile.preferred_states and state_col in filtered.columns:
@@ -573,6 +577,7 @@ def score_college_for_user(row: pd.Series, profile: EnhancedUserProfile, weights
     support = calculate_personalized_support(row, profile)
     academic_fit = calculate_personalized_academic_fit(row, profile)
     environment = calculate_personalized_environment_fit(row, profile)
+    access = calculate_personalized_access(row, profile)
 
     # Calculate weighted composite score
     score = (
@@ -581,7 +586,8 @@ def score_college_for_user(row: pd.Series, profile: EnhancedUserProfile, weights
         weights['equity'] * equity +
         weights['support'] * support +
         weights['academic_fit'] * academic_fit +
-        weights['environment'] * environment
+        weights['environment'] * environment +
+        weights['access'] * access
     )
 
     return score

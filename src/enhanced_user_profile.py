@@ -146,7 +146,9 @@ class EnhancedUserProfile:
     weight_academic_fit : float
         Weight for academic offerings (default: 0.15)
     weight_environment : float
-        Weight for environment fit (default: 0.05)
+        Weight for environment fit (default: 0.06)
+    weight_access : float
+        Weight for admission likelihood/access (default: 0.05)
     """
 
     # ============ REQUIRED FIELDS (no defaults) ============
@@ -224,10 +226,11 @@ class EnhancedUserProfile:
     # Scoring Weights (must sum to ~1.0)
     weight_roi: float = 0.20
     weight_affordability: float = 0.25
-    weight_equity: float = 0.20
-    weight_support: float = 0.15
-    weight_academic_fit: float = 0.15
-    weight_environment: float = 0.05
+    weight_equity: float = 0.18
+    weight_support: float = 0.13
+    weight_academic_fit: float = 0.13
+    weight_environment: float = 0.06
+    weight_access: float = 0.05
 
     def __post_init__(self):
         """Validate profile after initialization."""
@@ -281,7 +284,8 @@ class EnhancedUserProfile:
             self.weight_equity +
             self.weight_support +
             self.weight_academic_fit +
-            self.weight_environment
+            self.weight_environment +
+            self.weight_access
         )
         if not (0.99 <= weight_sum <= 1.01):
             raise ValueError(f"Weights must sum to 1.0, got {weight_sum}")
@@ -328,7 +332,8 @@ class EnhancedUserProfile:
             'equity': self.weight_equity,
             'support': self.weight_support,
             'academic_fit': self.weight_academic_fit,
-            'environment': self.weight_environment
+            'environment': self.weight_environment,
+            'access': self.weight_access
         }
 
     def __str__(self):
@@ -445,12 +450,13 @@ LOW_INCOME_PARENT = EnhancedUserProfile(
     strong_support_services=True,
 
     # Weights - emphasize affordability and support
-    weight_affordability=0.35,
+    weight_affordability=0.30,  # Reduced from 0.35 to make total 1.0
     weight_support=0.25,
     weight_equity=0.20,
     weight_roi=0.15,
     weight_academic_fit=0.05,
-    weight_environment=0.00
+    weight_environment=0.00,
+    weight_access=0.05  # Added to match the default weight
 )
 
 # Example 2: International STEM student
@@ -479,12 +485,13 @@ INTERNATIONAL_STEM = EnhancedUserProfile(
     include_reach_schools=True,
 
     # Weights - emphasize ROI and academic fit
-    weight_roi=0.30,
+    weight_roi=0.25,  # Reduced from 0.30 to make total 1.0
     weight_academic_fit=0.25,
     weight_affordability=0.20,
     weight_support=0.10,
     weight_equity=0.10,
-    weight_environment=0.05
+    weight_environment=0.05,
+    weight_access=0.05  # Added to match the default weight
 )
 
 # Example 3: First-gen student interested in MSI
@@ -516,10 +523,11 @@ FIRST_GEN_HSI_INTEREST = EnhancedUserProfile(
     # Weights - balanced with emphasis on equity and support
     weight_equity=0.25,
     weight_support=0.20,
-    weight_affordability=0.25,
+    weight_affordability=0.20,  # Reduced from 0.25 to make room for weight_access
     weight_roi=0.15,
     weight_academic_fit=0.10,
-    weight_environment=0.05
+    weight_environment=0.05,
+    weight_access=0.05  # Added to match the default weight
 )
 
 # Collection for easy access
