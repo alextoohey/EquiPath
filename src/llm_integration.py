@@ -20,14 +20,20 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.user_profile import UserProfile
 
+try:
+    from src.enhanced_user_profile import EnhancedUserProfile
+    ENHANCED_PROFILE_AVAILABLE = True
+except ImportError:
+    ENHANCED_PROFILE_AVAILABLE = False
 
-def build_recommendation_summary(profile: UserProfile, ranked_df, top_k=5):
+
+def build_recommendation_summary(profile, ranked_df, top_k=5):
     """
     Build a summary of recommendations for LLM input.
 
     Parameters:
     -----------
-    profile : UserProfile
+    profile : UserProfile or EnhancedUserProfile
         Student profile
     ranked_df : pd.DataFrame
         Ranked colleges DataFrame
@@ -41,23 +47,50 @@ def build_recommendation_summary(profile: UserProfile, ranked_df, top_k=5):
     """
     import pandas as pd
 
-    summary = {
-        "student_profile": {
-            "race": profile.race,
-            "is_parent": profile.is_parent,
-            "first_gen": profile.first_gen,
-            "budget": profile.budget,
-            "income_bracket": profile.income_bracket,
-            "gpa": profile.gpa,
-            "preferences": {
-                "in_state_only": profile.in_state_only,
-                "state": profile.state,
-                "public_only": profile.public_only,
-                "school_size_pref": profile.school_size_pref
-            }
-        },
-        "recommendations": []
-    }
+    # Handle both old UserProfile and new EnhancedUserProfile
+    if ENHANCED_PROFILE_AVAILABLE and isinstance(profile, EnhancedUserProfile):
+        # Map EnhancedUserProfile attributes to summary format
+        summary = {
+            "student_profile": {
+                "race": profile.race_ethnicity if hasattr(profile, 'race_ethnicity') else 'PREFER_NOT_TO_SAY',
+                "is_parent": profile.is_student_parent if hasattr(profile, 'is_student_parent') else False,
+                "first_gen": profile.is_first_gen if hasattr(profile, 'is_first_gen') else False,
+                "budget": profile.annual_budget if hasattr(profile, 'annual_budget') else 25000,
+                "income_bracket": profile.family_income if hasattr(profile, 'family_income') else None,
+                "gpa": profile.gpa if hasattr(profile, 'gpa') else 3.0,
+                "intended_major": profile.intended_major if hasattr(profile, 'intended_major') else 'Undecided',
+                "preferences": {
+                    "in_state_only": profile.in_state_only if hasattr(profile, 'in_state_only') else False,
+                    "state": profile.home_state if hasattr(profile, 'home_state') else None,
+                    "public_only": (profile.institution_type_pref == 'public') if hasattr(profile, 'institution_type_pref') else False,
+                    "school_size_pref": profile.size_pref if hasattr(profile, 'size_pref') else 'no_preference',
+                    "urbanization_pref": profile.urbanization_pref if hasattr(profile, 'urbanization_pref') else 'no_preference'
+                }
+            },
+            "recommendations": []
+        }
+    else:
+        # Old UserProfile format
+        summary = {
+            "student_profile": {
+                "race": profile.race,
+                "is_parent": profile.is_parent,
+                "first_gen": profile.first_gen,
+                "budget": profile.budget,
+                "income_bracket": profile.income_bracket,
+                "gpa": profile.gpa,
+                "preferences": {
+                    "in_state_only": profile.in_state_only,
+                    "state": profile.state,
+                    "public_only": profile.public_only,
+                    "school_size_pref": profile.school_size_pref
+                }
+            },
+            "recommendations": []
+        }
+
+    # Determine if student is a parent (for compatibility with both profile types)
+    is_parent = getattr(profile, 'is_student_parent', getattr(profile, 'is_parent', False))
 
     for idx, (_, row) in enumerate(ranked_df.head(top_k).iterrows(), 1):
         college = {
@@ -65,20 +98,22 @@ def build_recommendation_summary(profile: UserProfile, ranked_df, top_k=5):
             "name": row.get('Institution Name', 'Unknown'),
             "state": row.get('State of Institution', 'N/A'),
             "sector": row.get('Sector of Institution', 'N/A'),
-            "user_score": float(row.get('user_score', 0)),
+            "composite_score": float(row.get('composite_score', row.get('user_score', 0))),
             "metrics": {
                 "roi_score": float(row.get('roi_score', 0)),
-                "affordability_score": float(row.get('afford_score_parent' if profile.is_parent else 'afford_score_std', 0)),
-                "equity_parity": float(row.get('equity_parity', 0)),
-                "access_score": float(row.get('access_score_base', 0))
+                "affordability_score": float(row.get('personalized_affordability', row.get('afford_score_parent' if is_parent else 'afford_score_std', 0))),
+                "equity_score": float(row.get('personalized_equity', row.get('equity_parity', 0))),
+                "support_score": float(row.get('personalized_support', 0)),
+                "academic_fit": float(row.get('personalized_academic_fit', 0)),
+                "access_score": float(row.get('personalized_access', row.get('access_score_base', 0)))
             },
             "financials": {
-                "net_price": float(pd.to_numeric(row.get('Net Price', 0), errors='coerce')),
-                "median_debt": float(pd.to_numeric(row.get('Median Debt of Completers', 0), errors='coerce')),
+                "net_price": float(pd.to_numeric(row.get('Net Price', row.get('Average Net Price', 0)), errors='coerce')),
+                "median_debt": float(pd.to_numeric(row.get('Median Debt of Completers', row.get('Median Debt of Completers_CR', 0)), errors='coerce')),
                 "median_earnings_10yr": float(pd.to_numeric(row.get('Median Earnings of Students Working and Not Enrolled 10 Years After Entry', 0), errors='coerce'))
             },
             "admission_rate": float(pd.to_numeric(row.get('Total Percent of Applicants Admitted', 50), errors='coerce')),
-            "cluster_archetype": row.get('cluster_label', 'N/A')
+            "selectivity": row.get('selectivity_bucket', 'Unknown')
         }
         summary["recommendations"].append(college)
 
@@ -143,31 +178,47 @@ Focus on:
 
 Keep explanations concise but meaningful. Use a supportive, encouraging tone."""
 
+    # Format income for display
+    income_display = profile.get('income_bracket', 'Not specified')
+    if isinstance(income_display, (int, float)) and income_display:
+        income_display = f"${income_display:,}"
+
     user_prompt = f"""
 Student Profile:
-- Race/Ethnicity: {profile['race']}
-- Student-Parent: {profile['is_parent']}
-- First-Generation: {profile['first_gen']}
-- Budget: ${profile['budget']:,}
-- Income: {profile['income_bracket']}
-- GPA: {profile['gpa']}
+- Race/Ethnicity: {profile.get('race', 'Not specified')}
+- Intended Major: {profile.get('intended_major', 'Undecided')}
+- Student-Parent: {profile.get('is_parent', False)}
+- First-Generation: {profile.get('first_gen', False)}
+- Budget: ${profile.get('budget', 0):,}
+- Income: {income_display}
+- GPA: {profile.get('gpa', 'Not specified')}
 
 Top {len(recs)} Recommended Colleges:
 {json.dumps(recs, indent=2)}
 
-Please provide:
-1. A brief intro paragraph explaining how these recommendations were personalized
-2. For each of the top 3-4 colleges, provide 2-3 bullet points explaining why it's a good fit
-3. A concluding thought about next steps
+Please provide a JSON response with the following structure:
+{{
+  "overview": "A brief paragraph explaining how these recommendations were personalized for this student",
+  "recommendations": [
+    {{
+      "name": "College Name",
+      "why_good_fit": "2-3 sentences explaining why this college is a good fit for this specific student, focusing on their unique circumstances, affordability, career outcomes, and support services"
+    }},
+    ...
+  ]
+}}
 
-Keep it warm, supportive, and actionable.
+Keep explanations warm, supportive, and actionable. Focus on equity, affordability, and student success.
 
-IMPORTANT: When mentioning dollar amounts, write them WITHOUT the dollar sign (e.g., "33,000" instead of "$33,000") to avoid formatting issues."""
+IMPORTANT:
+1. Return ONLY valid JSON (no markdown code blocks, no extra text)
+2. When mentioning dollar amounts, write them WITHOUT the dollar sign (e.g., "33,000" instead of "$33,000")
+3. Provide explanations for ALL {len(recs)} colleges in the recommendations list"""
 
     try:
         response = client.messages.create(
-            model=os.getenv('ANTHROPIC_MODEL', 'claude-3-haiku-20240307'),
-            max_tokens=1500,
+            model=os.getenv('ANTHROPIC_MODEL', 'claude-3-5-sonnet-20240620'),
+            max_tokens=3000,
             temperature=0.7,
             system=system_prompt,
             messages=[
@@ -175,10 +226,31 @@ IMPORTANT: When mentioning dollar amounts, write them WITHOUT the dollar sign (e
             ]
         )
 
-        return response.content[0].text
+        # Parse JSON response
+        content = response.content[0].text.strip()
+
+        # Remove markdown code blocks if present
+        if content.startswith("```"):
+            # Find the first { and last }
+            start = content.find('{')
+            end = content.rfind('}')
+            if start != -1 and end != -1:
+                content = content[start:end+1]
+
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            # If JSON parsing fails, return a simple structure
+            return {
+                "overview": content,
+                "recommendations": []
+            }
 
     except Exception as e:
-        return f"Error generating LLM explanation: {str(e)}\n\nPlease check your API key and try again."
+        return {
+            "overview": f"Error generating AI summaries: {str(e)}",
+            "recommendations": []
+        }
 
 
 def parse_user_text_to_profile(text: str, api_key: Optional[str] = None):

@@ -38,7 +38,10 @@ def main():
 
     # Check if user has a saved profile from other pages
     has_profile = 'saved_profile' in st.session_state and st.session_state.saved_profile is not None
-    has_recommendations = 'saved_recommendations' in st.session_state and st.session_state.saved_recommendations is not None
+    has_recommendations = (
+        ('saved_recommendations' in st.session_state and st.session_state.saved_recommendations is not None) or
+        ('recommended_colleges' in st.session_state and st.session_state.recommended_colleges is not None)
+    )
 
     if has_profile or has_recommendations:
         st.markdown("""
@@ -75,20 +78,28 @@ def main():
     recommended_schools = set()
 
     if has_profile or has_recommendations:
+        # Check if we should default to showing only recommended colleges
+        default_index = 1 if st.session_state.get('show_only_recommended', False) else 0
+
         with filter_cols[0]:
             show_mode = st.radio(
                 "Show Schools",
                 options=["all", "recommended"],
                 format_func=lambda x: "🌎 All Schools" if x == "all" else "⭐ My Recommendations",
-                index=0
+                index=default_index
             )
 
         # Get recommendations if in recommended mode
         if show_mode == "recommended":
-            if has_recommendations:
-                # Use saved recommendations
+            recommendations_df = None
+
+            # Check for recommendations from My Profile page first
+            if 'recommended_colleges' in st.session_state and st.session_state.recommended_colleges is not None:
+                recommendations_df = st.session_state.recommended_colleges
+            elif 'saved_recommendations' in st.session_state and st.session_state.saved_recommendations is not None:
+                # Use saved recommendations from other pages
                 recommendations_df = st.session_state.saved_recommendations
-            elif has_profile:
+            elif has_profile and 'saved_profile' in st.session_state:
                 # Generate recommendations from profile
                 with st.spinner("Loading your recommended schools..."):
                     # Load data
@@ -102,9 +113,17 @@ def main():
                     # Save for future use
                     st.session_state.saved_recommendations = recommendations_df
 
-            # Get set of recommended school names
-            recommended_schools = set(recommendations_df['Institution Name'].tolist())
-            st.info(f"📍 Showing {len(recommended_schools)} recommended schools on the map")
+            # Get set of recommended school names if we have recommendations
+            if recommendations_df is not None and len(recommendations_df) > 0:
+                recommended_schools = set(recommendations_df['Institution Name'].tolist())
+                st.info(f"📍 Showing {len(recommended_schools)} recommended schools on the map")
+            else:
+                st.warning("⚠️ No recommendations found. Showing all schools instead.")
+                show_mode = "all"
+
+            # Reset the flag after first use
+            if 'show_only_recommended' in st.session_state:
+                st.session_state.show_only_recommended = False
 
     # Get all unique states
     all_states = set()
@@ -194,9 +213,16 @@ def main():
 
     # If we have recommendations, use that data
     if has_recommendations:
-        recommendations_df = st.session_state.saved_recommendations
-        for _, row in recommendations_df.iterrows():
-            college_details_lookup[row['Institution Name']] = row
+        # Get recommendations from whichever source has them
+        recommendations_df = None
+        if 'recommended_colleges' in st.session_state and st.session_state.recommended_colleges is not None:
+            recommendations_df = st.session_state.recommended_colleges
+        elif 'saved_recommendations' in st.session_state and st.session_state.saved_recommendations is not None:
+            recommendations_df = st.session_state.saved_recommendations
+
+        if recommendations_df is not None:
+            for _, row in recommendations_df.iterrows():
+                college_details_lookup[row['Institution Name']] = row
 
     # For all schools view, load the full database
     if show_mode == "all" or not college_details_lookup:

@@ -47,6 +47,8 @@ def initialize_shared_profile():
             'home_state': None,
             'in_state_only': False,
             'preferred_states': [],
+            'zip_code': None,
+            'max_distance_from_home': None,
 
             # Environment
             'urbanization_pref': 'no_preference',
@@ -133,6 +135,8 @@ def build_profile_from_shared_state():
             home_state=data['home_state'],
             in_state_only=data['in_state_only'],
             preferred_states=data['preferred_states'],
+            zip_code=data.get('zip_code'),
+            max_distance_from_home=data.get('max_distance_from_home'),
 
             # Environment
             urbanization_pref=data['urbanization_pref'],
