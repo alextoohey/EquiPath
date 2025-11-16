@@ -340,21 +340,13 @@ python src/llm_integration.py
 
 This project was built for the 7th Annual Datathon (Track 2: Educational Equity).
 
-**Contributors**: [Your Team Name/Names]
+**Contributors**: [Alex Toohey, Andre Lee, Davyn Paringkoan, Leo Zhang]
 
 ---
 
 ## 📝 License
 
 This project uses publicly available federal education data. The code and methodology are provided for educational and non-commercial use.
-
----
-
-## 📧 Contact
-
-For questions or collaboration:
-- **Email**: [your-email]
-- **GitHub**: [your-github]
 
 ---
 
