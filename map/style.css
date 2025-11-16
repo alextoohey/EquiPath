@@ -1,0 +1,33 @@
+body {
+    margin: 0;
+    padding: 0;
+    display: flex; /* Use flexbox to put items side-by-side */
+    height: 100vh; /* 100% of the viewport height */
+    font-family: sans-serif;
+}
+
+/* Style the sidebar */
+#sidebar {
+    width: 250px; /* Give the sidebar a fixed width */
+    background: #f4f4f4;
+    padding: 10px;
+    overflow-y: auto; /* Make it scrollable if states list is long */
+    border-right: 1px solid #ccc;
+    flex-shrink: 0; /* Don't let the sidebar shrink */
+}
+
+#sidebar h2 {
+    font-size: 1.2em;
+    margin-top: 0;
+}
+
+#sidebar select {
+    width: 100%;
+    padding: 5px;
+}
+
+/* Make the map fill the *rest* of the window */
+#map {
+    flex-grow: 1; /* This makes it take up all remaining space */
+    height: 100%; /* Make it 100% tall of its container (the body) */
+}
