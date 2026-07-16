@@ -21,14 +21,15 @@ import os
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.shared_profile_state import (
+from src.profile_state import (
     initialize_shared_profile,
     get_shared_profile,
     has_minimum_profile
 )
-from src.enhanced_scoring import rank_colleges_for_user, get_personalized_weights
-from src.enhanced_feature_engineering import build_enhanced_featured_college_df
-from src.llm_integration import build_recommendation_summary, generate_explanations
+from src.scoring import rank_colleges_for_user, get_personalized_weights
+from src.features import build_college_features
+from src.llm import build_recommendation_summary, generate_explanations
+from src.config import get_anthropic_api_key, get_anthropic_model
 
 
 def format_urbanization(value):
@@ -185,7 +186,7 @@ def main():
 
             # Get recommendations
             with st.spinner("Finding your best matches..."):
-                colleges_df = build_enhanced_featured_college_df(
+                colleges_df = build_college_features(
                     earnings_ceiling=profile.earnings_ceiling_match
                 )
                 recommendations = rank_colleges_for_user(colleges_df, profile, top_k=top_k)
@@ -253,7 +254,7 @@ def main():
                         summary = build_recommendation_summary(profile, recommendations, top_k=len(recommendations))
 
                         # Generate explanations
-                        api_key = os.getenv('ANTHROPIC_API_KEY')
+                        api_key = get_anthropic_api_key()
                         if api_key:
                             explanations = generate_explanations(summary, api_key=api_key)
                             if explanations and isinstance(explanations, dict) and 'recommendations' in explanations:
@@ -419,7 +420,7 @@ def main():
             """)
 
             # Check for API key
-            api_key = os.getenv('ANTHROPIC_API_KEY')
+            api_key = get_anthropic_api_key()
             if not api_key:
                 st.warning("⚠️ Anthropic API key not found. Set ANTHROPIC_API_KEY in your .env file to use the Q&A feature.")
             else:
@@ -466,7 +467,7 @@ def main():
                                 ]
 
                                 response = client.messages.create(
-                                    model=os.getenv('ANTHROPIC_MODEL', 'claude-3-haiku-20240307'),
+                                    model=get_anthropic_model(),
                                     max_tokens=1000,
                                     messages=messages
                                 )

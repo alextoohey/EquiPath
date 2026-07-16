@@ -7,11 +7,8 @@ Your profile is automatically saved and shared across all pages.
 
 import streamlit as st
 
-from src.enhanced_app_streamlit_chat import (
-    ANTHROPIC_AVAILABLE,
-    enhanced_chat_collect_profile,
-)
-from src.shared_profile_state import (
+from src.chat import render_chat_profile_builder
+from src.profile_state import (
     initialize_shared_profile,
     is_profile_complete,
     has_minimum_profile
@@ -41,10 +38,6 @@ def main():
 
     st.divider()
 
-    if not ANTHROPIC_AVAILABLE:
-        st.error("⚠️ Anthropic package not installed. Install with: pip install anthropic")
-        st.stop()
-
     # Sidebar - Profile Status
     st.sidebar.header("Profile Status")
 
@@ -61,7 +54,7 @@ def main():
     # Reset button
     st.sidebar.divider()
     if st.sidebar.button("🔄 Reset Chat & Start Over"):
-        from src.shared_profile_state import reset_shared_profile
+        from src.profile_state import reset_shared_profile
         reset_shared_profile()
         # Clear chat-specific session state
         for key in list(st.session_state.keys()):
@@ -98,7 +91,7 @@ def main():
             """)
 
     # Render the chat interface
-    enhanced_chat_collect_profile()
+    render_chat_profile_builder()
 
     # Get Recommendations button (appears only after profile is complete)
     if is_profile_complete():

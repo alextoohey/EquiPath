@@ -16,10 +16,8 @@ import pandas as pd
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.feature_engineering import build_featured_college_df
+from src.features import build_college_features
 from src.clustering import add_clusters
-from src.user_profile import UserProfile
-from src.scoring import rank_colleges_for_user
 
 
 def main():
@@ -36,14 +34,13 @@ def main():
     # Title and description
     st.title("🗺️ U.S. Postsecondary Schools Interactive Map")
 
-    # Check if user has a saved profile from other pages
-    has_profile = 'saved_profile' in st.session_state and st.session_state.saved_profile is not None
+    # Recommendations arrive via session state from the My Recommendations page
     has_recommendations = (
-        ('saved_recommendations' in st.session_state and st.session_state.saved_recommendations is not None) or
-        ('recommended_colleges' in st.session_state and st.session_state.recommended_colleges is not None)
+        'recommended_colleges' in st.session_state
+        and st.session_state.recommended_colleges is not None
     )
 
-    if has_profile or has_recommendations:
+    if has_recommendations:
         st.markdown("""
         Explore postsecondary schools across the United States on an interactive map.
         - **Toggle between all schools or your recommended schools**
@@ -58,7 +55,7 @@ def main():
         - **Click on clusters** to zoom in and see individual schools
         - **Click on markers** to view detailed information about each school
 
-        💡 **Tip:** Create a profile in the College Finder or AI Chat pages to see your recommended schools on the map!
+        💡 **Tip:** Build a profile on the My Profile or AI Chat Assistant page, generate recommendations, and they will appear here!
         """)
 
     st.divider()
@@ -77,7 +74,7 @@ def main():
     show_mode = "all"
     recommended_schools = set()
 
-    if has_profile or has_recommendations:
+    if has_recommendations:
         # Check if we should default to showing only recommended colleges
         default_index = 1 if st.session_state.get('show_only_recommended', False) else 0
 
@@ -91,27 +88,7 @@ def main():
 
         # Get recommendations if in recommended mode
         if show_mode == "recommended":
-            recommendations_df = None
-
-            # Check for recommendations from My Profile page first
-            if 'recommended_colleges' in st.session_state and st.session_state.recommended_colleges is not None:
-                recommendations_df = st.session_state.recommended_colleges
-            elif 'saved_recommendations' in st.session_state and st.session_state.saved_recommendations is not None:
-                # Use saved recommendations from other pages
-                recommendations_df = st.session_state.saved_recommendations
-            elif has_profile and 'saved_profile' in st.session_state:
-                # Generate recommendations from profile
-                with st.spinner("Loading your recommended schools..."):
-                    # Load data
-                    df = build_featured_college_df()
-                    df_clustered, centroids, labels = add_clusters(df, n_clusters=5)
-
-                    # Get recommendations
-                    profile = st.session_state.saved_profile
-                    recommendations_df = rank_colleges_for_user(df_clustered, profile, top_k=50)
-
-                    # Save for future use
-                    st.session_state.saved_recommendations = recommendations_df
+            recommendations_df = st.session_state.recommended_colleges
 
             # Get set of recommended school names if we have recommendations
             if recommendations_df is not None and len(recommendations_df) > 0:
@@ -213,27 +190,16 @@ def main():
 
     # If we have recommendations, use that data
     if has_recommendations:
-        # Get recommendations from whichever source has them
-        recommendations_df = None
-        if 'recommended_colleges' in st.session_state and st.session_state.recommended_colleges is not None:
-            recommendations_df = st.session_state.recommended_colleges
-        elif 'saved_recommendations' in st.session_state and st.session_state.saved_recommendations is not None:
-            recommendations_df = st.session_state.saved_recommendations
-
-        if recommendations_df is not None:
-            for _, row in recommendations_df.iterrows():
-                college_details_lookup[row['Institution Name']] = row
+        for _, row in st.session_state.recommended_colleges.iterrows():
+            college_details_lookup[row['Institution Name']] = row
 
     # For all schools view, load the full database
     if show_mode == "all" or not college_details_lookup:
         try:
             with st.spinner("Loading college details..."):
-                from src.feature_engineering import build_featured_college_df
-                from src.clustering import add_clusters
-
                 # Cache this in session state to avoid reloading
                 if 'full_college_data' not in st.session_state:
-                    df = build_featured_college_df()
+                    df = build_college_features()
                     df_clustered, _, _ = add_clusters(df, n_clusters=5)
                     st.session_state.full_college_data = df_clustered
 
@@ -422,19 +388,6 @@ def main():
             col_idx = idx % 4
             with cols[col_idx]:
                 st.write(f"**{state}:** {count:,}")
-
-    # Show profile summary if available
-    if has_profile:
-        with st.expander("👤 Your Profile Settings"):
-            prof = st.session_state.saved_profile
-            st.write(f"**Budget:** ${prof.budget:,.0f}")
-            st.write(f"**GPA:** {prof.gpa}")
-            st.write(f"**State:** {prof.state or 'Not specified'}")
-            st.write(f"**In-state only:** {'Yes' if prof.in_state_only else 'No'}")
-            st.write(f"**Public only:** {'Yes' if prof.public_only else 'No'}")
-            if st.button("🔄 Update Profile"):
-                st.info("Go to the College Finder or AI Chat page to update your profile")
-
 
 if __name__ == "__main__":
     main()

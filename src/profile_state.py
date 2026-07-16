@@ -7,7 +7,7 @@ through the chat interface and edited manually.
 """
 
 import streamlit as st
-from src.enhanced_user_profile import EnhancedUserProfile
+from src.profile import UserProfile
 
 
 def initialize_shared_profile():
@@ -94,11 +94,11 @@ def update_profile_from_data(profile_data):
 
 def build_profile_from_shared_state():
     """
-    Build an EnhancedUserProfile object from the shared state.
+    Build an UserProfile object from the shared state.
 
     Returns:
     --------
-    EnhancedUserProfile
+    UserProfile
         Profile object built from current shared state
     """
     initialize_shared_profile()
@@ -106,7 +106,7 @@ def build_profile_from_shared_state():
     data = st.session_state.shared_profile_data
 
     try:
-        profile = EnhancedUserProfile(
+        profile = UserProfile(
             # Required
             gpa=data['gpa'],
             annual_budget=data['annual_budget'],
@@ -173,7 +173,7 @@ def get_shared_profile():
 
     Returns:
     --------
-    EnhancedUserProfile or None
+    UserProfile or None
         Current profile object
     """
     initialize_shared_profile()

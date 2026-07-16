@@ -1,6 +1,6 @@
 """
-Distance calculation utilities for EquiPath.
-Handles zip code lookups and distance filtering for college searches.
+Zip-code distance utilities for EquiPath.
+Handles zip-code geocoding and radius filtering for college searches.
 """
 
 import pandas as pd

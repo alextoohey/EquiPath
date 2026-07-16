@@ -13,7 +13,7 @@ import os
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.shared_profile_state import (
+from src.profile_state import (
     initialize_shared_profile,
     is_profile_complete,
     has_minimum_profile
@@ -63,7 +63,7 @@ def main():
     # Reset button
     st.sidebar.divider()
     if st.sidebar.button("🔄 Reset Profile"):
-        from src.shared_profile_state import reset_shared_profile
+        from src.profile_state import reset_shared_profile
         reset_shared_profile()
         st.rerun()
 

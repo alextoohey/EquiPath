@@ -1,7 +1,7 @@
 """
-Enhanced User Profile Schema for EquiPath Project
+User profile schema for EquiPath.
 
-Extends the base UserProfile with comprehensive student dimensions including:
+Captures the student dimensions used for personalized matching:
 - Demographic information (handled sensitively for equity)
 - Academic background and goals
 - Financial situation
@@ -15,7 +15,7 @@ from typing import Literal, Optional, List
 
 
 @dataclass
-class EnhancedUserProfile:
+class UserProfile:
     """
     Comprehensive student profile for personalized, equitable college matching.
 
@@ -340,7 +340,7 @@ class EnhancedUserProfile:
         """String representation of enhanced user profile."""
         lines = [
             "=" * 60,
-            "ENHANCED USER PROFILE",
+            "USER PROFILE",
             "=" * 60,
             "",
             "ACADEMIC BACKGROUND",
@@ -422,7 +422,7 @@ class EnhancedUserProfile:
 # ============================================================================
 
 # Example 1: Low-income, first-gen student-parent
-LOW_INCOME_PARENT = EnhancedUserProfile(
+LOW_INCOME_PARENT = UserProfile(
     # Academic
     gpa=3.2,
     test_score_status="test_optional",
@@ -460,7 +460,7 @@ LOW_INCOME_PARENT = EnhancedUserProfile(
 )
 
 # Example 2: International STEM student
-INTERNATIONAL_STEM = EnhancedUserProfile(
+INTERNATIONAL_STEM = UserProfile(
     # Academic
     gpa=3.8,
     test_score_status="submitted",
@@ -495,7 +495,7 @@ INTERNATIONAL_STEM = EnhancedUserProfile(
 )
 
 # Example 3: First-gen student interested in MSI
-FIRST_GEN_HSI_INTEREST = EnhancedUserProfile(
+FIRST_GEN_HSI_INTEREST = UserProfile(
     # Academic
     gpa=3.5,
     test_score_status="test_optional",
@@ -540,7 +540,7 @@ EXAMPLE_PROFILES = {
 
 if __name__ == "__main__":
     # Test profiles
-    print("Testing Enhanced User Profiles\n")
+    print("Example user profiles\n")
 
     for name, profile in EXAMPLE_PROFILES.items():
         print(f"\n{name.upper().replace('_', ' ')}")

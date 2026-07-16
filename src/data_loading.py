@@ -1,5 +1,3 @@
-3
-
 """
 Data loading module for EquiPath project.
 Handles loading and merging of College Results 2021 and Affordability Gap datasets.
@@ -177,9 +175,6 @@ def load_merged_data(data_dir='data', join_key='UNITID', deduplicate=False, forc
         Whether to deduplicate by keeping first occurrence of each UNITID
     force_reload : bool
         If True, ignore cache and reload/re-merge data
-        Whether to deduplicate by keeping first occurrence of each UNITID.
-        Default False to preserve all earnings ceiling scenarios.
-        WARNING: Setting to True will lose granularity of affordability data!
     earnings_ceiling : float, optional
         Filter to specific earnings ceiling value.
         Valid values: 30000.0, 48000.0, 75000.0, 110000.0, 150000.0
@@ -200,16 +195,12 @@ def load_merged_data(data_dir='data', join_key='UNITID', deduplicate=False, forc
     merged_cache_path = os.path.join(cache_dir, cache_filename)
 
     if not force_reload and os.path.exists(merged_cache_path):
-        print("="*60)
         print("Loading merged data from cache...")
-        print("="*60)
         df = pd.read_parquet(merged_cache_path)
         print(f"✓ Loaded {len(df)} rows and {len(df.columns)} columns from cache")
         return df
 
-    print("="*60)
     print("Loading datasets...")
-    print("="*60)
 
     # Load both datasets (these will use their own Parquet caches)
     college_results = load_college_results(data_dir, force_reload=force_reload)
@@ -232,9 +223,7 @@ def load_merged_data(data_dir='data', join_key='UNITID', deduplicate=False, forc
         ].copy()
         print(f"  Affordability Gap rows: {initial_ag_rows} → {len(affordability_gap)}")
 
-    print("\n" + "="*60)
     print("Merging datasets...")
-    print("="*60)
 
     if join_key == 'UNITID':
         # Use ID-based merge (recommended)

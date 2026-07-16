@@ -13,7 +13,7 @@ import os
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.feature_engineering import build_featured_college_df
+from src.features import build_college_features
 
 
 def main():
@@ -44,7 +44,7 @@ def main():
     # Load data
     with st.spinner("Loading college data..."):
         if 'insights_data' not in st.session_state:
-            df = build_featured_college_df()
+            df = build_college_features()
             st.session_state.insights_data = df
         else:
             df = st.session_state.insights_data

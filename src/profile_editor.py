@@ -5,7 +5,7 @@ Provides an interactive UI for viewing and editing the user profile.
 """
 
 import streamlit as st
-from src.shared_profile_state import initialize_shared_profile, build_profile_from_shared_state
+from src.profile_state import initialize_shared_profile, build_profile_from_shared_state
 
 
 def render_profile_editor():

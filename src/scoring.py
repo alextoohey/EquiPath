@@ -1,90 +1,68 @@
 """
-Personalized scoring logic for EquiPath project.
-Maps (college, user_profile) to a personalized Student Success & Equity Score.
+Personalized scoring for EquiPath.
+
+Maps (college, user profile) to a composite match score across seven
+dimensions: ROI, affordability, equity, support, academic fit, environment,
+and access. Applies the user's hard filters first (budget, geography,
+institution type, MSI preference, ...), then computes personalized component
+scores and a weighted composite used for ranking.
 """
 
 import pandas as pd
 import numpy as np
-import sys
-import os
-
-# Add parent directory to path for imports
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from src.user_profile import UserProfile
-from src.distance_utils import filter_by_radius, add_distance_column
+from src.profile import UserProfile
+from src.distance import filter_by_radius, add_distance_column
 
 
-def choose_weights(profile: UserProfile) -> dict:
+def get_personalized_weights(profile: UserProfile) -> dict:
     """
-    Choose personalized weights for the scoring function based on user profile.
+    Get personalized scoring weights from Enhanced User Profile.
 
-    Base weights:
-    - alpha (ROI): 0.25
-    - beta (Affordability): 0.30
-    - gamma (Equity): 0.25
-    - delta (Access): 0.20
-
-    Adjustments:
-    - Low income or small budget → increase beta, slightly reduce alpha
-    - Student-parent → increase beta and gamma
-    - First-gen or marginalized race → increase gamma
+    The profile already contains customizable weights set by the user.
+    This function can further adjust them based on special circumstances.
 
     Parameters:
     -----------
     profile : UserProfile
-        Student profile
+        Enhanced student profile with preset weights
 
     Returns:
     --------
     dict
-        Dictionary with weights: {'alpha', 'beta', 'gamma', 'delta'}
+        Dictionary with weights for all indices
     """
-    # Start with default weights
-    weights = {
-        'alpha': 0.25,  # ROI
-        'beta': 0.30,   # Affordability
-        'gamma': 0.25,  # Equity
-        'delta': 0.20   # Access
-    }
+    weights = profile.get_composite_weight_dict()
 
-    # Adjust for low income or low budget
-    if profile.income_bracket == "LOW" or profile.budget < 20000:
-        weights['beta'] += 0.15  # Increase affordability weight
-        weights['alpha'] -= 0.05  # Reduce ROI weight slightly
+    # Optional: Apply automatic adjustments based on extreme needs
+    # (Profile weights are already customized, so minimal adjustment)
 
-    # Adjust for student-parents
-    if profile.is_parent:
-        weights['beta'] += 0.10  # Affordability is critical
-        weights['gamma'] += 0.05  # Equity matters more
-
-    # Adjust for first-gen or historically marginalized students
-    if profile.first_gen or profile.race in ["BLACK", "HISPANIC", "NATIVE"]:
-        weights['gamma'] += 0.10  # Equity support is important
-
-    # Normalize weights to sum to 1.0
+    # Ensure weights sum to 1.0
     total = sum(weights.values())
-    weights = {k: v / total for k, v in weights.items()}
+    if total > 0:
+        weights = {k: v / total for k, v in weights.items()}
 
     return weights
 
 
 def filter_colleges_for_user(df: pd.DataFrame, profile: UserProfile) -> pd.DataFrame:
     """
-    Filter colleges based on user constraints.
+    Filter colleges based on enhanced user constraints.
 
     Filters:
-    - Budget constraint (net price <= 1.5x budget)
-    - Public only (if specified)
-    - In-state only (if specified)
-    - School size preference (if specified)
+    - Budget constraint (net price <= budget with small tolerance)
+    - Institution type (public/private/for-profit)
+    - Geographic (in-state, preferred states, preferred regions)
+    - Selectivity buckets (reach/target/safety)
+    - Environment (size, urbanization, Carnegie type)
+    - MSI preference
+    - Data completeness (if required)
 
     Parameters:
     -----------
     df : pd.DataFrame
-        Featured college DataFrame
+        Enhanced featured college DataFrame
     profile : UserProfile
-        Student profile
+        Enhanced student profile
 
     Returns:
     --------
@@ -94,63 +72,203 @@ def filter_colleges_for_user(df: pd.DataFrame, profile: UserProfile) -> pd.DataF
     filtered = df.copy()
     initial_count = len(filtered)
 
-    # Filter by budget (net price <= 1.5x budget)
+    print(f"Applying user filters (starting with {initial_count} institutions)")
+
+    # 1. BUDGET FILTER
     net_price_col = 'Net Price'
     if net_price_col in filtered.columns:
-        max_price = profile.budget * 1.5
-        filtered = filtered[pd.to_numeric(filtered[net_price_col], errors='coerce') <= max_price]
-        print(f"  Budget filter: {initial_count} → {len(filtered)} institutions")
+        # Allow generous buffer (50%) over budget to be more permissive
+        max_price = profile.annual_budget * 1.50
+        before_count = len(filtered)
+        filtered = filtered[
+            pd.to_numeric(filtered[net_price_col], errors='coerce').isna() |
+            (pd.to_numeric(filtered[net_price_col], errors='coerce') <= max_price)
+        ]
+        print(f"  After budget filter (≤${max_price:,.0f} or missing data): {len(filtered)} institutions (removed {before_count - len(filtered)})")
 
-    # Filter by public only
-    if profile.public_only:
-        sector_col = 'Sector of Institution'
-        if sector_col in filtered.columns:
-            # Sector codes: 1 = Public 4-year, 4 = Public 2-year
-            # Convert to numeric and filter for public sectors
-            sector_numeric = pd.to_numeric(filtered[sector_col], errors='coerce')
-            filtered = filtered[sector_numeric.isin([1, 4])]
-            print(f"  Public only filter: {len(filtered)} institutions")
+    # 2. EXCLUDE FOR-PROFIT (strongly recommended)
+    if profile.exclude_for_profit:
+        control_col = 'Control of Institution'
+        if control_col in filtered.columns:
+            # Control: 1=public, 2=private nonprofit, 3=for-profit
+            filtered = filtered[pd.to_numeric(filtered[control_col], errors='coerce') != 3]
+            print(f"  After excluding for-profit: {len(filtered)} institutions")
 
-    # Filter by in-state
-    if profile.in_state_only and profile.state:
-        state_col = 'State of Institution'
-        if state_col in filtered.columns:
-            # Convert to string and filter
-            filtered = filtered[filtered[state_col].astype(str).str.upper() == profile.state.upper()]
-            print(f"  In-state filter ({profile.state}): {len(filtered)} institutions")
+    # 3. INSTITUTION TYPE PREFERENCE
+    if profile.institution_type_pref != "either":
+        control_col = 'Control of Institution'
+        if control_col in filtered.columns:
+            if profile.institution_type_pref == "public":
+                filtered = filtered[pd.to_numeric(filtered[control_col], errors='coerce') == 1]
+            elif profile.institution_type_pref == "private_nonprofit":
+                filtered = filtered[pd.to_numeric(filtered[control_col], errors='coerce') == 2]
+            print(f"  After {profile.institution_type_pref} filter: {len(filtered)} institutions")
 
-    # Filter by school size (if preference specified)
-    if profile.school_size_pref:
-        size_col = 'Institution Size Category'
-        if size_col in filtered.columns:
-            # Convert to string and filter
-            filtered = filtered[filtered[size_col].astype(str).str.contains(profile.school_size_pref, case=False, na=False)]
-            print(f"  Size filter ({profile.school_size_pref}): {len(filtered)} institutions")
+    # 4. GEOGRAPHIC FILTERS
+    state_col = 'State of Institution'
 
-    # Filter by zip code radius (if specified)
-    if profile.zip_code and profile.radius_miles:
-        print(f"  Applying radius filter: {profile.radius_miles} miles from zip {profile.zip_code}")
-        filtered = filter_by_radius(filtered, profile.zip_code, profile.radius_miles)
-        print(f"  Radius filter: {len(filtered)} institutions within {profile.radius_miles} miles")
+    # In-state only - only apply if both in_state_only AND home_state are set
+    if profile.in_state_only and profile.home_state and state_col in filtered.columns:
+        filtered = filtered[filtered[state_col].astype(str).str.upper() == profile.home_state.upper()]
+        print(f"  After in-state filter ({profile.home_state}): {len(filtered)} institutions")
+    elif profile.in_state_only and not profile.home_state:
+        # Invalid state: in-state preference set but no home state specified
+        # Ignore the in-state preference in this case
+        print("  Warning: In-state preference set but no home state specified - ignoring in-state filter")
+
+    # Preferred states
+    elif profile.preferred_states and state_col in filtered.columns:
+        preferred_upper = [s.upper() for s in profile.preferred_states]
+        filtered = filtered[filtered[state_col].astype(str).str.upper().isin(preferred_upper)]
+        print(f"  After preferred states filter: {len(filtered)} institutions")
+
+    # Preferred regions
+    if profile.preferred_regions:
+        region_col = 'Region #'
+        if region_col in filtered.columns:
+            filtered = filtered[pd.to_numeric(filtered[region_col], errors='coerce').isin(profile.preferred_regions)]
+            print(f"  After preferred regions filter: {len(filtered)} institutions")
+
+    # 5. SELECTIVITY BUCKETS
+    # Note: We don't filter by selectivity - we include all levels and let users see
+    # the full range (Reach/Target/Safety/Open). Selectivity is shown in results for context.
+    # This ensures students see a balanced college list.
+    selectivity_buckets = profile.get_selectivity_preferences()
+    if selectivity_buckets and len(selectivity_buckets) < 4:  # Only filter if user explicitly excluded some
+        if 'selectivity_bucket' in filtered.columns:
+            before_count = len(filtered)
+            # Include rows where selectivity bucket matches OR is missing (to be more permissive)
+            filtered = filtered[
+                filtered['selectivity_bucket'].isin(selectivity_buckets) |
+                filtered['selectivity_bucket'].isna()
+            ]
+            print(f"  After selectivity filter ({', '.join(selectivity_buckets)} + missing): {len(filtered)} institutions (removed {before_count - len(filtered)})")
+
+    # 6. SIZE PREFERENCE
+    if profile.size_pref and profile.size_pref != "no_preference":
+        if 'size_category' in filtered.columns:
+            # Map preference to category
+            size_map = {
+                "small": 1,
+                "medium": 2,
+                "large": [3, 4, 5]
+            }
+            if profile.size_pref.lower() in size_map:
+                before_count = len(filtered)
+                target_sizes = size_map[profile.size_pref.lower()]
+                if not isinstance(target_sizes, list):
+                    target_sizes = [target_sizes]
+                # Include schools with matching size OR missing size data
+                filtered = filtered[
+                    pd.to_numeric(filtered['size_category'], errors='coerce').isin(target_sizes) |
+                    pd.to_numeric(filtered['size_category'], errors='coerce').isna()
+                ]
+                print(f"  After size filter ({profile.size_pref} + missing): {len(filtered)} institutions (removed {before_count - len(filtered)})")
+
+    # 7. URBANIZATION PREFERENCE
+    if profile.urbanization_pref and profile.urbanization_pref != "no_preference":
+        # Use binary flags created in environment features
+        urban_map = {
+            "urban": "is_urban",
+            "suburban": "is_suburban",
+            "rural": "is_rural"
+        }
+        flag_col = urban_map.get(profile.urbanization_pref.lower())
+        if flag_col and flag_col in filtered.columns:
+            before_count = len(filtered)
+            # Include matching urbanization OR missing data
+            filtered = filtered[
+                (filtered[flag_col] == 1) |
+                pd.to_numeric(filtered[flag_col], errors='coerce').isna()
+            ]
+            print(f"  After urbanization filter ({profile.urbanization_pref} + missing): {len(filtered)} institutions (removed {before_count - len(filtered)})")
+
+    # 8. CARNEGIE TYPE PREFERENCE
+    if profile.carnegie_pref:
+        has_match = pd.Series(False, index=filtered.index)
+        carnegie_flags = {
+            "doctoral": "is_doctoral",
+            "masters": "is_masters",
+            "baccalaureate": "is_baccalaureate",
+            "associate": "is_associate"
+        }
+        for pref in profile.carnegie_pref:
+            flag_col = carnegie_flags.get(pref.lower())
+            if flag_col and flag_col in filtered.columns:
+                has_match |= (filtered[flag_col] == 1)
+
+        if has_match.any():
+            filtered = filtered[has_match]
+            print(f"  After Carnegie type filter: {len(filtered)} institutions")
+
+    # 9. MSI PREFERENCE
+    if profile.msi_preference and profile.msi_preference != "no_preference":
+        msi_flags = {
+            "HBCU": "HBCU",
+            "HSI": "HSI",
+            "Tribal": "TRIBAL",
+            "AANAPII": "AANAPII",
+            "PBI": "PBI"
+        }
+
+        if profile.msi_preference.upper() in msi_flags:
+            flag_col = msi_flags[profile.msi_preference.upper()]
+            if flag_col in filtered.columns:
+                filtered = filtered[pd.to_numeric(filtered[flag_col], errors='coerce') == 1]
+                print(f"  After MSI filter ({profile.msi_preference}): {len(filtered)} institutions")
+        elif profile.msi_preference.lower() == "any_msi":
+            # Include any MSI
+            msi_match = pd.Series(False, index=filtered.index)
+            for flag_col in msi_flags.values():
+                if flag_col in filtered.columns:
+                    msi_match |= (pd.to_numeric(filtered[flag_col], errors='coerce') == 1)
+            if msi_match.any():
+                filtered = filtered[msi_match]
+                print(f"  After any MSI filter: {len(filtered)} institutions")
+
+    # 10. MINIMUM GRADUATION RATE
+    if profile.min_graduation_rate:
+        # Use overall graduation rate if available
+        grad_col = "Bachelor's Degree Graduation Rate Within 6 Years - Total"
+        if grad_col in filtered.columns:
+            filtered = filtered[pd.to_numeric(filtered[grad_col], errors='coerce') >= profile.min_graduation_rate]
+            print(f"  After min graduation rate filter (>={profile.min_graduation_rate}%): {len(filtered)} institutions")
+
+    # 11. ZIP CODE RADIUS FILTER
+    if profile.zip_code and profile.max_distance_from_home:
+        print(f"  Applying radius filter: {profile.max_distance_from_home} miles from zip {profile.zip_code}")
+        filtered = filter_by_radius(filtered, profile.zip_code, profile.max_distance_from_home)
+        print(f"  After radius filter: {len(filtered)} institutions within {profile.max_distance_from_home} miles")
     elif profile.zip_code:
         # Add distance column even if not filtering
         filtered = add_distance_column(filtered, profile.zip_code)
 
-    print(f"  Final filtered set: {len(filtered)} institutions")
+    print(f"Final filtered set: {len(filtered)} institutions")
+
+    if len(filtered) == 0:
+        print("\n⚠️  WARNING: No colleges match your criteria!")
+        print("Suggestions:")
+        print("  1. Increase your annual budget")
+        print("  2. Remove geographic restrictions (in-state only, preferred states)")
+        print("  3. Set preferences to 'no_preference' or 'either'")
+        print("  4. Include more selectivity buckets (reach, target, safety, open)")
+        print("  5. Remove MSI preference filter if set")
+        print()
+
     return filtered
 
 
-def affordability_for_user(row: pd.Series, profile: UserProfile) -> float:
+def calculate_personalized_affordability(row: pd.Series, profile: UserProfile) -> float:
     """
-    Calculate personalized affordability score for a user.
+    Calculate personalized affordability score.
 
-    Uses afford_score_parent if is_parent, else afford_score_std.
-    Applies penalty if net price exceeds budget.
+    Uses parent-specific score if student-parent, otherwise standard.
+    Applies additional penalty if significantly over budget.
 
     Parameters:
     -----------
     row : pd.Series
-        College row from DataFrame
+        College row
     profile : UserProfile
         Student profile
 
@@ -159,33 +277,34 @@ def affordability_for_user(row: pd.Series, profile: UserProfile) -> float:
     float
         Personalized affordability score (0-1)
     """
-    # Choose base affordability score
-    if profile.is_parent:
+    # Choose appropriate affordability score
+    if profile.is_student_parent:
         base_score = row.get('afford_score_parent', 0.5)
     else:
         base_score = row.get('afford_score_std', 0.5)
 
-    # Apply penalty if net price exceeds budget
+    # Additional penalty for exceeding budget
     net_price = pd.to_numeric(row.get('Net Price', 0), errors='coerce')
-    if pd.notna(net_price) and net_price > profile.budget:
-        excess_pct = (net_price - profile.budget) / profile.budget
-        penalty = min(0.3, excess_pct * 0.2)  # Max 30% penalty
+    if pd.notna(net_price) and net_price > profile.annual_budget:
+        excess_pct = (net_price - profile.annual_budget) / profile.annual_budget
+        # Steeper penalty for significant excess
+        penalty = min(0.4, excess_pct * 0.3)
         base_score = max(0, base_score - penalty)
 
     return base_score
 
 
-def equity_for_user(row: pd.Series, profile: UserProfile) -> float:
+def calculate_personalized_equity(row: pd.Series, profile: UserProfile) -> float:
     """
-    Calculate personalized equity score for a user.
+    Calculate personalized equity score.
 
     Uses race-specific graduation rate + overall equity parity.
-    Formula: 0.7 * race_specific_grad_rate_norm + 0.3 * equity_parity
+    Bonus for MSI match if applicable.
 
     Parameters:
     -----------
     row : pd.Series
-        College row from DataFrame
+        College row
     profile : UserProfile
         Student profile
 
@@ -203,36 +322,182 @@ def equity_for_user(row: pd.Series, profile: UserProfile) -> float:
         'PACIFIC': 'grad_rate_pacific_norm'
     }
 
-    # Get race-specific grad rate
-    grad_col = race_to_col.get(profile.race)
-    if grad_col and grad_col in row.index:
-        race_specific_norm = row.get(grad_col, 0.5)
+    # Get race-specific grad rate if available
+    if profile.race_ethnicity and profile.race_ethnicity != "PREFER_NOT_TO_SAY":
+        grad_col = race_to_col.get(profile.race_ethnicity)
+        if grad_col and grad_col in row.index:
+            race_specific_norm = row.get(grad_col, 0.5)
+        else:
+            race_specific_norm = 0.5
     else:
-        # Fallback: use average of available rates
+        # Use overall equity parity if no race specified
         race_specific_norm = 0.5
 
-    # Get equity parity
+    # Get equity parity (disparity measure)
     parity = row.get('equity_parity', 0.5)
 
     # Combine: 70% race-specific, 30% parity
     equity_score = 0.7 * race_specific_norm + 0.3 * parity
 
+    # Small bonus for MSI match (if applicable)
+    if profile.msi_preference and profile.msi_preference != "no_preference":
+        msi_flags = {"HBCU": "HBCU", "HSI": "HSI", "Tribal": "TRIBAL", "AANAPII": "AANAPII"}
+        if profile.msi_preference.upper() in msi_flags:
+            flag_col = msi_flags[profile.msi_preference.upper()]
+            if flag_col in row.index and pd.to_numeric(row.get(flag_col, 0), errors='coerce') == 1:
+                equity_score = min(1.0, equity_score * 1.1)  # 10% bonus
+
     return equity_score
 
 
-def access_for_user(row: pd.Series, profile: UserProfile) -> float:
+def calculate_personalized_support(row: pd.Series, profile: UserProfile) -> float:
     """
-    Calculate personalized access score for a user.
+    Calculate personalized support infrastructure score.
 
-    Considers admission rate and GPA fit:
-    - Safety schools (high admit rate, student above avg): boost
-    - Reach schools (low admit rate, student below avg): reduce
-    - Target schools: neutral
+    Applies bonus for students who need strong support (first-gen, nontraditional, etc.)
 
     Parameters:
     -----------
     row : pd.Series
-        College row from DataFrame
+        College row
+    profile : UserProfile
+        Student profile
+
+    Returns:
+    --------
+    float
+        Personalized support score (0-1)
+    """
+    base_score = row.get('support_infrastructure_score', 0.5)
+
+    # Bonus multiplier for students who particularly need support
+    if profile.strong_support_services or profile.is_first_gen or profile.is_nontraditional:
+        # Amplify differences - reward high support schools more
+        if base_score > 0.6:
+            base_score = min(1.0, base_score * 1.15)
+
+    return base_score
+
+
+def calculate_personalized_academic_fit(row: pd.Series, profile: UserProfile) -> float:
+    """
+    Calculate personalized academic offerings score.
+
+    Uses field-specific strength if major is specified, otherwise base score.
+    Bonus for research opportunities if desired.
+
+    Parameters:
+    -----------
+    row : pd.Series
+        College row
+    profile : UserProfile
+        Student profile
+
+    Returns:
+    --------
+    float
+        Personalized academic fit score (0-1)
+    """
+    # Start with base academic offerings score
+    base_score = row.get('academic_offerings_score', 0.5)
+
+    # Use field-specific strength if major specified
+    if profile.intended_major and profile.intended_major != "Undecided":
+        field_map = {
+            "STEM": "stem_strength",
+            "Business": "business_strength",
+            "Health": "health_strength",
+            "Social Sciences": "social_sciences_strength",
+            "Arts & Humanities": "arts_and_humanities_strength",
+            "Education": "education_strength"
+        }
+
+        strength_col = field_map.get(profile.intended_major)
+        if strength_col and strength_col in row.index:
+            field_strength = row.get(strength_col, 0.5)
+            # Weight: 70% field-specific, 30% overall
+            base_score = 0.7 * field_strength + 0.3 * base_score
+
+    # Bonus for research opportunities at doctoral institutions
+    if profile.research_opportunities:
+        if row.get('is_doctoral', 0) == 1:
+            base_score = min(1.0, base_score * 1.2)  # 20% bonus
+
+    return base_score
+
+
+def calculate_personalized_environment_fit(row: pd.Series, profile: UserProfile) -> float:
+    """
+    Calculate personalized environment fit score.
+
+    Checks match on size, urbanization, and diversity.
+
+    Parameters:
+    -----------
+    row : pd.Series
+        College row
+    profile : UserProfile
+        Student profile
+
+    Returns:
+    --------
+    float
+        Environment fit score (0-1)
+    """
+    # Start with diversity score
+    base_score = row.get('environment_diversity_score', 0.5)
+
+    # Check matches on preferences
+    matches = 0
+    checks = 0
+
+    # Size match
+    if profile.size_pref and profile.size_pref != "no_preference":
+        checks += 1
+        size_flags = {
+            "small": "size_small",
+            "medium": "size_medium",
+            "large": "size_large"
+        }
+        flag_col = size_flags.get(profile.size_pref.lower())
+        if flag_col and row.get(flag_col, 0) == 1:
+            matches += 1
+
+    # Urbanization match
+    if profile.urbanization_pref and profile.urbanization_pref != "no_preference":
+        checks += 1
+        urban_flags = {
+            "urban": "is_urban",
+            "suburban": "is_suburban",
+            "rural": "is_rural"
+        }
+        flag_col = urban_flags.get(profile.urbanization_pref.lower())
+        if flag_col and row.get(flag_col, 0) == 1:
+            matches += 1
+
+    # Calculate match bonus
+    if checks > 0:
+        match_rate = matches / checks
+        # Boost base score based on preference matches
+        base_score = base_score * 0.5 + match_rate * 0.5
+
+    # Special boost for international students at international-friendly schools
+    if profile.is_international:
+        intl_presence = row.get('intl_presence_norm', 0)
+        if intl_presence > 0.6:  # School has significant international presence
+            base_score = min(1.0, base_score * 1.15)
+
+    return base_score
+
+
+def calculate_personalized_access(row: pd.Series, profile: UserProfile) -> float:
+    """
+    Calculate personalized access score based on selectivity match.
+
+    Parameters:
+    -----------
+    row : pd.Series
+        College row
     profile : UserProfile
         Student profile
 
@@ -243,19 +508,30 @@ def access_for_user(row: pd.Series, profile: UserProfile) -> float:
     """
     base_access = row.get('access_score_base', 0.5)
 
-    # Get admission rate
-    admit_rate = pd.to_numeric(row.get('Total Percent of Applicants Admitted', 50), errors='coerce')
+    # Get selectivity bucket
+    bucket = row.get('selectivity_bucket', 'Unknown')
 
-    # Classify school type based on admission rate
-    if admit_rate >= 70:
-        school_type = 'Safety'
-        multiplier = 1.1 if profile.gpa >= 3.0 else 1.0
-    elif admit_rate <= 30:
-        school_type = 'Reach'
-        multiplier = 1.2 if profile.gpa >= 3.7 else 0.8
+    # Adjust based on GPA and bucket match
+    if bucket == 'Safety' and profile.gpa >= 3.0:
+        multiplier = 1.2  # Good fit - boost
+    elif bucket == 'Target' and 2.5 <= profile.gpa <= 3.8:
+        multiplier = 1.1  # Reasonable fit
+    elif bucket == 'Reach' and profile.gpa >= 3.7:
+        multiplier = 1.0  # Worth trying
+    elif bucket == 'Reach' and profile.gpa < 3.3:
+        multiplier = 0.7  # May be too difficult
+    elif bucket == 'Open':
+        multiplier = 1.3  # Easy access
     else:
-        school_type = 'Target'
         multiplier = 1.0
+
+    # Consider test scores if submitted
+    if profile.test_score_status == "submitted":
+        # Boost slightly for strong test scores
+        if profile.sat_score and profile.sat_score >= 1400:
+            multiplier *= 1.1
+        elif profile.act_score and profile.act_score >= 31:
+            multiplier *= 1.1
 
     access_score = min(1.0, base_access * multiplier)
 
@@ -264,130 +540,144 @@ def access_for_user(row: pd.Series, profile: UserProfile) -> float:
 
 def score_college_for_user(row: pd.Series, profile: UserProfile, weights: dict) -> float:
     """
-    Calculate the personalized Student Success & Equity Score.
+    Calculate the comprehensive personalized score.
 
-    Score = alpha * ROI + beta * Affordability + gamma * Equity + delta * Access
+    Score = weighted sum of all component scores
 
     Parameters:
     -----------
     row : pd.Series
-        College row from DataFrame
+        College row
     profile : UserProfile
         Student profile
     weights : dict
-        Personalized weights from choose_weights()
+        Personalized weights
 
     Returns:
     --------
     float
-        Final personalized score (0-1)
+        Final personalized composite score (0-1)
     """
-    # Get component scores
+    # Get all component scores
     roi = row.get('roi_score', 0.5)
-    affordability = affordability_for_user(row, profile)
-    equity = equity_for_user(row, profile)
-    access = access_for_user(row, profile)
+    affordability = calculate_personalized_affordability(row, profile)
+    equity = calculate_personalized_equity(row, profile)
+    support = calculate_personalized_support(row, profile)
+    academic_fit = calculate_personalized_academic_fit(row, profile)
+    environment = calculate_personalized_environment_fit(row, profile)
+    access = calculate_personalized_access(row, profile)
 
-    # Calculate weighted score
+    # Calculate weighted composite score
     score = (
-        weights['alpha'] * roi +
-        weights['beta'] * affordability +
-        weights['gamma'] * equity +
-        weights['delta'] * access
+        weights['roi'] * roi +
+        weights['affordability'] * affordability +
+        weights['equity'] * equity +
+        weights['support'] * support +
+        weights['academic_fit'] * academic_fit +
+        weights['environment'] * environment +
+        weights['access'] * access
     )
 
     return score
 
 
-def rank_colleges_for_user(df: pd.DataFrame, profile: UserProfile, top_k: int = 10) -> pd.DataFrame:
+def rank_colleges_for_user(df: pd.DataFrame, profile: UserProfile, top_k: int = 20) -> pd.DataFrame:
     """
-    Rank and return top colleges for a user based on personalized scoring.
+    Rank and return top colleges for a user using enhanced scoring.
 
     Parameters:
     -----------
     df : pd.DataFrame
-        Featured college DataFrame
+        Enhanced featured college DataFrame
     profile : UserProfile
-        Student profile
+        Enhanced student profile
     top_k : int
         Number of top colleges to return
 
     Returns:
     --------
     pd.DataFrame
-        Top-k colleges with user_score column
+        Ranked DataFrame with top_k colleges and their scores
     """
-    print("\n" + "="*60)
-    print(f"RANKING COLLEGES FOR USER")
-    print("="*60)
-    print(profile)
-    print("\n" + "="*60)
+    # Get personalized weights
+    weights = get_personalized_weights(profile)
 
     # Filter colleges
-    print("\nFiltering colleges...")
-    filtered_df = filter_colleges_for_user(df, profile)
+    filtered = filter_colleges_for_user(df, profile)
 
-    if len(filtered_df) == 0:
-        print("\n⚠ WARNING: No colleges match the filters!")
+    if len(filtered) == 0:
+        print("\n⚠️  No colleges match your filters. Try relaxing some constraints.")
         return pd.DataFrame()
 
-    # Choose weights
-    weights = choose_weights(profile)
-    print(f"\nPersonalized weights:")
-    print(f"  ROI (alpha):          {weights['alpha']:.3f}")
-    print(f"  Affordability (beta): {weights['beta']:.3f}")
-    print(f"  Equity (gamma):       {weights['gamma']:.3f}")
-    print(f"  Access (delta):       {weights['delta']:.3f}")
-
     # Calculate personalized scores
-    print(f"\nCalculating personalized scores for {len(filtered_df)} colleges...")
-    filtered_df = filtered_df.copy()
-    filtered_df['user_score'] = filtered_df.apply(
-        lambda row: score_college_for_user(row, profile, weights),
-        axis=1
+    print("\nCalculating personalized scores...")
+    filtered = filtered.copy()
+
+    # Calculate all component scores
+    filtered['personalized_affordability'] = filtered.apply(
+        lambda row: calculate_personalized_affordability(row, profile), axis=1
+    )
+    filtered['personalized_equity'] = filtered.apply(
+        lambda row: calculate_personalized_equity(row, profile), axis=1
+    )
+    filtered['personalized_support'] = filtered.apply(
+        lambda row: calculate_personalized_support(row, profile), axis=1
+    )
+    filtered['personalized_academic_fit'] = filtered.apply(
+        lambda row: calculate_personalized_academic_fit(row, profile), axis=1
+    )
+    filtered['personalized_environment'] = filtered.apply(
+        lambda row: calculate_personalized_environment_fit(row, profile), axis=1
+    )
+    filtered['personalized_access'] = filtered.apply(
+        lambda row: calculate_personalized_access(row, profile), axis=1
     )
 
-    # Sort by score
-    ranked_df = filtered_df.sort_values('user_score', ascending=False)
+    # Calculate composite score
+    filtered['composite_score'] = filtered.apply(
+        lambda row: score_college_for_user(row, profile, weights), axis=1
+    )
 
-    # Return top k
-    top_colleges = ranked_df.head(top_k)
+    # Rank by composite score
+    ranked = filtered.sort_values('composite_score', ascending=False).head(top_k)
 
-    print(f"\n✓ Top {min(top_k, len(top_colleges))} colleges identified!")
-    print("="*60)
+    print(f"Ranked top {len(ranked)} colleges")
 
-    return top_colleges
+    return ranked
 
 
 if __name__ == "__main__":
-    # Test the scoring system
-    from src.feature_engineering import build_featured_college_df
-    from src.user_profile import EXAMPLE_PROFILES
+    # Test enhanced scoring
+    from src.features import build_college_features
+    from src.profile import EXAMPLE_PROFILES
 
-    print("Loading featured college data...")
-    df = build_featured_college_df()
+    # Load featured data
+    colleges_df = build_college_features(earnings_ceiling=30000.0)
 
-    # Test with one example profile
+    # Test with example profile
     profile = EXAMPLE_PROFILES['low_income_parent']
 
+    print("\nUser Profile:")
+    print(profile)
+
     # Rank colleges
-    top_colleges = rank_colleges_for_user(df, profile, top_k=10)
+    recommendations = rank_colleges_for_user(colleges_df, profile, top_k=10)
 
     # Display results
-    if len(top_colleges) > 0:
+    if len(recommendations) > 0:
+        print("\n" + "="*60)
+        print("TOP 10 RECOMMENDATIONS")
+        print("="*60)
+
         display_cols = [
             'Institution Name',
             'State of Institution',
-            'user_score',
-            'roi_score',
-            'afford_score_parent',
-            'equity_parity',
-            'access_score_base',
-            'Net Price'
+            'selectivity_bucket',
+            'composite_score',
+            'personalized_affordability',
+            'personalized_support',
+            'personalized_equity'
         ]
-        display_cols = [col for col in display_cols if col in top_colleges.columns]
 
-        print("\n" + "="*60)
-        print("TOP 10 RECOMMENDED COLLEGES")
-        print("="*60)
-        print(top_colleges[display_cols].to_string(index=False))
+        available_cols = [col for col in display_cols if col in recommendations.columns]
+        print(recommendations[available_cols].to_string(index=False))

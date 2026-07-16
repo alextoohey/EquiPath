@@ -236,10 +236,10 @@ def recommend_cluster_for_profile(profile, cluster_labels_dict):
 
 if __name__ == "__main__":
     # Test clustering
-    from src.feature_engineering import build_featured_college_df
+    from src.features import build_college_features
 
     print("Building featured dataset...")
-    df = build_featured_college_df()
+    df = build_college_features()
 
     print("\n" + "="*60)
     print("TESTING K-MEANS CLUSTERING")
