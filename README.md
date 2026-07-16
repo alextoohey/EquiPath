@@ -73,7 +73,7 @@ The AI features (match explanations, Q&A chat) are optional. To enable them:
 cp .env.example .env   # then add your Anthropic API key
 ```
 
-Run the tests with `python -m pytest tests/`.
+Run the tests with `pip install pytest && python -m pytest tests/`.
 
 ### Deploy your own
 

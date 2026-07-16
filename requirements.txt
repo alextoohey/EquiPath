@@ -23,5 +23,6 @@ python-dotenv>=1.0.0
 # Optional: voice input/output for the chat assistant
 elevenlabs>=2.23.0
 
-# Notebooks (EDA only — not needed to run the app):
-#   jupyter, ipykernel, matplotlib, seaborn
+# Dev-only (not needed to run the app):
+#   pytest            — test suite (pip install pytest && python -m pytest tests/)
+#   jupyter, ipykernel, matplotlib, seaborn — EDA notebooks
