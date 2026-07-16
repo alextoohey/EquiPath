@@ -172,10 +172,12 @@ def main():
     # Get recommendations button
     if st.button("🔍 Find My Matches", type="primary", use_container_width=True):
         try:
-            # Clear all AI summary caches when generating new recommendations
+            # New recommendations invalidate cached AI summaries and any Q&A
+            # conversation about the previous list
             keys_to_delete = [key for key in st.session_state.keys() if key.startswith('ai_summaries_')]
             for key in keys_to_delete:
                 del st.session_state[key]
+            st.session_state.qa_chat_history = []
 
             # Build profile from current state
             profile = get_shared_profile()
@@ -241,8 +243,10 @@ def main():
         # Generate AI summaries if enabled
         ai_summaries = {}
         if use_ai_summaries and profile:
-            # Simple cache key based on the first college name (changes when recommendations change)
-            cache_key = f"ai_summaries_{recommendations.iloc[0]['Institution Name'] if len(recommendations) > 0 else 'none'}"
+            # Cache key covers the whole ranked list, so any change in the
+            # recommendations (not just the #1 school) regenerates summaries
+            names = tuple(recommendations['Institution Name']) if len(recommendations) > 0 else ()
+            cache_key = f"ai_summaries_{hash(names)}"
 
             if cache_key in st.session_state:
                 ai_summaries = st.session_state[cache_key]
@@ -411,7 +415,10 @@ def main():
         st.divider()
         st.subheader("💬 Ask Questions About Your Recommendations")
 
-        with st.expander("**Open Q&A Chat**", expanded=False):
+        # Stay expanded once a conversation exists, so the answer that arrives
+        # after the rerun isn't hidden behind a collapsed expander
+        with st.expander("**Open Q&A Chat**",
+                         expanded=bool(st.session_state.get('qa_chat_history'))):
             st.markdown("""
             Ask me anything about your recommended colleges! For example:
             - "Which of these schools has the best ROI?"
@@ -428,60 +435,53 @@ def main():
                 if 'qa_chat_history' not in st.session_state:
                     st.session_state.qa_chat_history = []
 
-                # Display chat history
+                # Display chat history (new messages are appended and shown via
+                # st.rerun, so everything always renders above the input box)
                 for msg in st.session_state.qa_chat_history:
                     with st.chat_message(msg["role"]):
                         st.write(msg["content"])
 
-                # Chat input
+                # Chat input stays the last element in the expander
                 if question := st.chat_input("Ask a question about your recommendations..."):
-                    # Add user message to history
                     st.session_state.qa_chat_history.append({"role": "user", "content": question})
 
-                    with st.chat_message("user"):
-                        st.write(question)
+                    with st.spinner("Thinking..."):
+                        try:
+                            import anthropic
 
-                    # Generate response
-                    with st.chat_message("assistant"):
-                        with st.spinner("Thinking..."):
-                            try:
-                                # Import anthropic
-                                import anthropic
+                            client = anthropic.Anthropic(api_key=api_key)
 
-                                client = anthropic.Anthropic(api_key=api_key)
+                            # System prompt carries the recommendations context;
+                            # the full chat history goes in messages so
+                            # follow-up questions keep their context
+                            context = f"You are helping a student understand their {len(recommendations)} college recommendations. "
+                            context += "Here are the top 5 recommendations:\n\n"
 
-                                # Build context from recommendations
-                                context = f"You are helping a student understand their {len(recommendations)} college recommendations. "
-                                context += "Here are the top 5 recommendations:\n\n"
+                            for idx, (_, row) in enumerate(recommendations.head(5).iterrows(), 1):
+                                inst_name = row.get('Institution Name', row.get('INSTNM', 'Unknown'))
+                                composite = row.get('composite_score', 0)
+                                city = safe_get(row, 'City', 'Unknown')
+                                state = safe_get(row, 'State of Institution', 'Unknown')
+                                context += f"{idx}. {inst_name} ({city}, {state}) - Match Score: {composite:.3f}\n"
 
-                                for idx, (_, row) in enumerate(recommendations.head(5).iterrows(), 1):
-                                    inst_name = row.get('Institution Name', row.get('INSTNM', 'Unknown'))
-                                    composite = row.get('composite_score', 0)
-                                    city = safe_get(row, 'City', 'Unknown')
-                                    state = safe_get(row, 'State of Institution', 'Unknown')
-                                    context += f"{idx}. {inst_name} ({city}, {state}) - Match Score: {composite:.3f}\n"
-
-                                # Create message
-                                messages = [
-                                    {"role": "user", "content": f"{context}\n\nQuestion: {question}"}
+                            response = client.messages.create(
+                                model=get_anthropic_model(),
+                                max_tokens=1000,
+                                system=context,
+                                messages=[
+                                    {"role": m["role"], "content": m["content"]}
+                                    for m in st.session_state.qa_chat_history
                                 ]
+                            )
 
-                                response = client.messages.create(
-                                    model=get_anthropic_model(),
-                                    max_tokens=1000,
-                                    messages=messages
-                                )
+                            answer = response.content[0].text
+                            st.session_state.qa_chat_history.append({"role": "assistant", "content": answer})
 
-                                answer = response.content[0].text
-                                st.write(answer)
+                        except Exception as e:
+                            error_msg = f"Error generating response: {str(e)}"
+                            st.session_state.qa_chat_history.append({"role": "assistant", "content": error_msg})
 
-                                # Add to history
-                                st.session_state.qa_chat_history.append({"role": "assistant", "content": answer})
-
-                            except Exception as e:
-                                error_msg = f"Error generating response: {str(e)}"
-                                st.error(error_msg)
-                                st.session_state.qa_chat_history.append({"role": "assistant", "content": error_msg})
+                    st.rerun()
 
     # Info box at bottom
     st.divider()

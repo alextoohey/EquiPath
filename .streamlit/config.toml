@@ -1,8 +1,5 @@
-[theme]
-primaryColor = "#1f6f5c"
-backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#f2f5f4"
-textColor = "#1f2937"
+# No [theme] section on purpose: Streamlit then follows each viewer's
+# system light/dark preference.
 
 [browser]
 gatherUsageStats = false

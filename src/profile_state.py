@@ -169,7 +169,11 @@ def build_profile_from_shared_state():
 
 def get_shared_profile():
     """
-    Get the current shared profile, building it from state if needed.
+    Get the current shared profile.
+
+    Always rebuilds from shared_profile_data — the dict is the single source
+    of truth that the profile editor and chat both write to, so returning a
+    previously built object would serve stale values (e.g. old weights).
 
     Returns:
     --------
@@ -178,10 +182,7 @@ def get_shared_profile():
     """
     initialize_shared_profile()
 
-    if st.session_state.shared_profile is None:
-        return build_profile_from_shared_state()
-
-    return st.session_state.shared_profile
+    return build_profile_from_shared_state()
 
 
 def mark_profile_complete():
