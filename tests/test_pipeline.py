@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 from src.features import build_college_features
-from src.profile import UserProfile, EXAMPLE_PROFILES
+from src.profile import UserProfile, EXAMPLE_PROFILES, normalize_state
 from src.scoring import (
     filter_colleges_for_user,
     get_personalized_weights,
@@ -107,3 +107,46 @@ def test_example_profiles_all_produce_recommendations(colleges):
     for name, profile in EXAMPLE_PROFILES.items():
         recs = rank_colleges_for_user(colleges, profile, top_k=5)
         assert len(recs) > 0, f"no recommendations for example profile {name}"
+
+
+def test_normalize_state():
+    assert normalize_state("California") == "CA"
+    assert normalize_state("  new york ") == "NY"
+    assert normalize_state("tx") == "TX"
+    assert normalize_state("CA") == "CA"
+    assert normalize_state("Narnia") is None
+    assert normalize_state("") is None
+    assert normalize_state(None) is None
+
+
+def test_multiselect_size_filter_matches_any(colleges):
+    profile = UserProfile(gpa=3.0, annual_budget=40000, size_pref=["small", "medium"])
+    filtered = filter_colleges_for_user(colleges, profile)
+
+    assert len(filtered) > 0
+    sizes = pd.to_numeric(filtered['size_category'], errors='coerce')
+    # Only small (1), medium (2), or missing sizes survive
+    assert sizes.dropna().isin([1, 2]).all()
+    # And both selected sizes are actually represented
+    assert {1, 2} <= set(sizes.dropna().unique())
+
+
+def test_multiselect_msi_filter_matches_any(colleges):
+    profile = UserProfile(gpa=3.0, annual_budget=40000, msi_preference=["HBCU", "HSI"])
+    filtered = filter_colleges_for_user(colleges, profile)
+
+    assert len(filtered) > 0
+    hbcu = pd.to_numeric(filtered.get('HBCU'), errors='coerce').fillna(0) == 1
+    hsi = pd.to_numeric(filtered.get('HSI'), errors='coerce').fillna(0) == 1
+    assert (hbcu | hsi).all()
+    # Both MSI types should be represented, not just one
+    assert hbcu.any() and hsi.any()
+
+
+def test_empty_preferences_mean_no_filtering(colleges):
+    open_profile = UserProfile(gpa=3.0, annual_budget=40000)
+    pref_profile = UserProfile(gpa=3.0, annual_budget=40000,
+                               size_pref=[], urbanization_pref=[], msi_preference=[])
+    a = filter_colleges_for_user(colleges, open_profile)
+    b = filter_colleges_for_user(colleges, pref_profile)
+    assert len(a) == len(b)

@@ -13,6 +13,7 @@ import re
 
 import streamlit as st
 
+from src.profile import normalize_state
 from src.profile_state import (
     build_profile_from_shared_state,
     mark_profile_complete,
@@ -365,8 +366,8 @@ def render_chat_profile_builder():
         # Geographic Preferences
         {
             "key": "home_state",
-            "question": "What state are you from? (2-letter code like CA, NY, TX, or 'skip' if international)",
-            "type": "text"
+            "question": "What state are you from? (like CA or California, or 'skip' if international)",
+            "type": "state"
         },
         {
             "key": "in_state_only",
@@ -395,15 +396,15 @@ def render_chat_profile_builder():
         # Environment Preferences
         {
             "key": "urbanization_pref",
-            "question": "What kind of setting do you prefer?\n- Urban (big city)\n- Suburban (near city)\n- Town (small town)\n- Rural (countryside)\n- No preference",
-            "type": "choice",
-            "options": ["urban", "suburban", "town", "rural", "no_preference"]
+            "question": "What kind of setting do you prefer? You can pick more than one, separated by commas.\n- Urban (big city)\n- Suburban (near city)\n- Town (small town)\n- Rural (countryside)\n- No preference",
+            "type": "multichoice",
+            "options": ["urban", "suburban", "town", "rural"]
         },
         {
             "key": "size_pref",
-            "question": "What school size do you prefer?\n- Small (under 2,000)\n- Medium (2,000-10,000)\n- Large (over 10,000)\n- No preference",
-            "type": "choice",
-            "options": ["small", "medium", "large", "no_preference"]
+            "question": "What school size do you prefer? You can pick more than one, separated by commas.\n- Small (under 2,000)\n- Medium (2,000-10,000)\n- Large (over 10,000)\n- No preference",
+            "type": "multichoice",
+            "options": ["small", "medium", "large"]
         },
         {
             "key": "institution_type_pref",
@@ -413,9 +414,9 @@ def render_chat_profile_builder():
         },
         {
             "key": "msi_preference",
-            "question": "Are you interested in Minority-Serving Institutions?\nOptions:\n- HBCU (Historically Black)\n- HSI (Hispanic-Serving)\n- Tribal College\n- Any MSI\n- No preference",
-            "type": "choice",
-            "options": ["HBCU", "HSI", "Tribal", "any_MSI", "no_preference"]
+            "question": "Are you interested in Minority-Serving Institutions? You can pick more than one, separated by commas.\nOptions:\n- HBCU (Historically Black)\n- HSI (Hispanic-Serving)\n- Tribal College\n- Any MSI\n- No preference",
+            "type": "multichoice",
+            "options": ["HBCU", "HSI", "Tribal", "any_MSI"]
         },
 
         # Academic Priorities
@@ -661,6 +662,29 @@ def process_user_answer(user_input, question_config, profile_data):
         elif q_type == 'bool':
             return 'yes' in user_input.lower() or 'y' == user_input.lower()
 
+        elif q_type == 'multichoice':
+            # Comma/"and"-separated multi-select; empty list = no preference
+            no_pref = ['no preference', 'no_preference', 'none', 'any', 'no',
+                       "doesn't matter", 'dont care', "don't care"]
+            if user_input.lower().strip() in no_pref:
+                return []
+
+            options = question_config.get('options', [])
+            picks = []
+            parts = [piece for chunk in user_input.split(',')
+                     for piece in chunk.split(' and ')]
+            for part in parts:
+                part = part.strip().lower()
+                if not part:
+                    continue
+                for option in options:
+                    if option.lower() == part or option.lower() in part or part in option.lower():
+                        if option not in picks:
+                            picks.append(option)
+                        break
+
+            return picks if picks else None
+
         elif q_type == 'choice':
             # Match to one of the options
             options = question_config.get('options', [])
@@ -788,41 +812,18 @@ def process_user_answer(user_input, question_config, profile_data):
             if user_input.lower().strip() in negative_responses:
                 return []
 
-            # State name to code mapping
-            state_map = {
-                'california': 'CA', 'oregon': 'OR', 'washington': 'WA', 'texas': 'TX',
-                'new york': 'NY', 'florida': 'FL', 'illinois': 'IL', 'pennsylvania': 'PA',
-                'ohio': 'OH', 'georgia': 'GA', 'north carolina': 'NC', 'michigan': 'MI',
-                'new jersey': 'NJ', 'virginia': 'VA', 'massachusetts': 'MA', 'arizona': 'AZ',
-                'tennessee': 'TN', 'indiana': 'IN', 'missouri': 'MO', 'maryland': 'MD',
-                'wisconsin': 'WI', 'colorado': 'CO', 'minnesota': 'MN', 'south carolina': 'SC',
-                'alabama': 'AL', 'louisiana': 'LA', 'kentucky': 'KY', 'oklahoma': 'OK',
-                'connecticut': 'CT', 'utah': 'UT', 'iowa': 'IA', 'nevada': 'NV',
-                'arkansas': 'AR', 'mississippi': 'MS', 'kansas': 'KS', 'new mexico': 'NM',
-                'nebraska': 'NE', 'west virginia': 'WV', 'idaho': 'ID', 'hawaii': 'HI',
-                'new hampshire': 'NH', 'maine': 'ME', 'montana': 'MT', 'rhode island': 'RI',
-                'delaware': 'DE', 'south dakota': 'SD', 'north dakota': 'ND', 'alaska': 'AK',
-                'vermont': 'VT', 'wyoming': 'WY'
-            }
-
-            # Split by comma and "and"
+            # Split by comma and "and", normalize names/codes, drop unknowns
             items = []
             for part in user_input.split(','):
-                # Further split by "and"
                 for subpart in part.split(' and '):
-                    cleaned = subpart.strip().lower()
-                    if cleaned:
-                        # Check if it's a state name
-                        if cleaned in state_map:
-                            items.append(state_map[cleaned])
-                        # Check if it's already a 2-letter code
-                        elif len(cleaned) == 2:
-                            items.append(cleaned.upper())
-                        # Otherwise just take it as-is (uppercase)
-                        else:
-                            items.append(cleaned.upper())
+                    code = normalize_state(subpart)
+                    if code and code not in items:
+                        items.append(code)
 
-            return items if items else []
+            return items
+
+        elif q_type == 'state':
+            return normalize_state(user_input)
 
         else:  # text
             return user_input
@@ -981,10 +982,10 @@ def build_profile_from_data(profile_data):
         'max_distance_from_home': profile_data.get('max_distance_from_home'),
 
         # Environment
-        'urbanization_pref': profile_data.get('urbanization_pref', 'no_preference'),
-        'size_pref': profile_data.get('size_pref', 'no_preference'),
+        'urbanization_pref': profile_data.get('urbanization_pref', []),
+        'size_pref': profile_data.get('size_pref', []),
         'institution_type_pref': profile_data.get('institution_type_pref', 'either'),
-        'msi_preference': profile_data.get('msi_preference', 'no_preference'),
+        'msi_preference': profile_data.get('msi_preference', []),
 
         # Academic priorities
         'research_opportunities': profile_data.get('research_opportunities', False),

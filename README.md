@@ -122,6 +122,12 @@ flowchart LR
     G --> I[Map + visualizations]
 ```
 
+## Where this could go
+
+- **Persistent profiles** — session state currently lives in memory, so a browser refresh starts over; a database plus lightweight auth would make profiles and saved searches durable.
+- **A learned success model** — with outcome data (graduation, debt, earnings for students *like this one* at schools *like this one*), a supervised model could join the seven indices as an eighth, predictive score.
+- **More data** — admission-rate coverage is ~35%; transfer pathways and campus support services (childcare, mental health) would sharpen the support index.
+
 ## Team
 
 Built by **Alex Toohey, Andre Lee, Davyn Paringkoan, and Leo Zhang** for the 7th Annual Datathon for Social Good.

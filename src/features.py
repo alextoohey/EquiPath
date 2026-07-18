@@ -233,13 +233,19 @@ def add_environment_features(df):
     Campus-environment features used for filtering and environment-fit scoring:
     size/urbanization/Carnegie/control flags plus a student-body diversity score.
     """
-    size_col = 'Institution Size Category'
-    if size_col in df.columns:
-        df['size_category'] = df[size_col]
-        is_numeric = df[size_col].dtype in ['int64', 'float64']
-        df['size_small'] = (df[size_col] == 1).astype(int) if is_numeric else 0
-        df['size_medium'] = (df[size_col] == 2).astype(int) if is_numeric else 0
-        df['size_large'] = (df[size_col] >= 3).astype(int) if is_numeric else 0
+    # The size column appears in both source datasets, so the merge suffixes
+    # it — resolve whichever variant is present (values are codes 1-5)
+    size_col = next(
+        (c for c in ('Institution Size Category', 'Institution Size Category_CR',
+                     'Institution Size Category_AG') if c in df.columns),
+        None,
+    )
+    if size_col:
+        size_numeric = pd.to_numeric(df[size_col], errors='coerce')
+        df['size_category'] = size_numeric
+        df['size_small'] = (size_numeric == 1).astype(int)
+        df['size_medium'] = (size_numeric == 2).astype(int)
+        df['size_large'] = (size_numeric >= 3).astype(int)
     else:
         df['size_category'] = np.nan
 

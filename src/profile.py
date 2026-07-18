@@ -13,6 +13,43 @@ Captures the student dimensions used for personalized matching:
 from dataclasses import dataclass, field
 from typing import Literal, Optional, List
 
+# Full state names -> USPS codes, for normalizing free-text state input
+# (the datasets store two-letter codes only)
+STATE_NAME_TO_CODE = {
+    'alabama': 'AL', 'alaska': 'AK', 'arizona': 'AZ', 'arkansas': 'AR',
+    'california': 'CA', 'colorado': 'CO', 'connecticut': 'CT', 'delaware': 'DE',
+    'florida': 'FL', 'georgia': 'GA', 'hawaii': 'HI', 'idaho': 'ID',
+    'illinois': 'IL', 'indiana': 'IN', 'iowa': 'IA', 'kansas': 'KS',
+    'kentucky': 'KY', 'louisiana': 'LA', 'maine': 'ME', 'maryland': 'MD',
+    'massachusetts': 'MA', 'michigan': 'MI', 'minnesota': 'MN', 'mississippi': 'MS',
+    'missouri': 'MO', 'montana': 'MT', 'nebraska': 'NE', 'nevada': 'NV',
+    'new hampshire': 'NH', 'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY',
+    'north carolina': 'NC', 'north dakota': 'ND', 'ohio': 'OH', 'oklahoma': 'OK',
+    'oregon': 'OR', 'pennsylvania': 'PA', 'rhode island': 'RI', 'south carolina': 'SC',
+    'south dakota': 'SD', 'tennessee': 'TN', 'texas': 'TX', 'utah': 'UT',
+    'vermont': 'VT', 'virginia': 'VA', 'washington': 'WA', 'west virginia': 'WV',
+    'wisconsin': 'WI', 'wyoming': 'WY', 'district of columbia': 'DC',
+    'puerto rico': 'PR',
+}
+
+VALID_STATE_CODES = set(STATE_NAME_TO_CODE.values())
+
+
+def normalize_state(value):
+    """
+    Normalize a state name or code to a USPS two-letter code.
+
+    Returns None for anything unrecognized ("California" -> "CA",
+    "ca" -> "CA", "Narnia" -> None).
+    """
+    if not value or not isinstance(value, str):
+        return None
+    cleaned = value.strip().lower()
+    if cleaned in STATE_NAME_TO_CODE:
+        return STATE_NAME_TO_CODE[cleaned]
+    code = cleaned.upper()
+    return code if code in VALID_STATE_CODES else None
+
 
 @dataclass
 class UserProfile:
@@ -94,18 +131,18 @@ class UserProfile:
         Maximum distance from home in miles (requires zip_code)
 
     # Environment & Campus Culture Preferences
-    urbanization_pref : Optional[str]
-        "urban", "suburban", "town", "rural", "no_preference"
-    size_pref : Optional[str]
-        "small", "medium", "large", "no_preference"
+    urbanization_pref : List[str]
+        Any of "urban", "suburban", "town", "rural" (empty = no preference)
+    size_pref : List[str]
+        Any of "small", "medium", "large" (empty = no preference)
     institution_type_pref : Optional[str]
         "public", "private_nonprofit", "either" (never recommend for-profit)
     carnegie_pref : Optional[List[str]]
         Preferred Carnegie types: "doctoral", "masters", "baccalaureate",
         "associate"
-    msi_preference : Optional[str]
-        Interest in MSI: "HBCU", "HSI", "Tribal", "AANAPII", "any_MSI",
-        "no_preference"
+    msi_preference : List[str]
+        Interest in MSIs: any of "HBCU", "HSI", "Tribal", "AANAPII", or
+        "any_MSI" (empty = no preference)
 
     # Academic Environment Preferences
     research_opportunities : bool
@@ -200,12 +237,13 @@ class UserProfile:
     zip_code: Optional[str] = None  # 5-digit zip code for distance calculations
     max_distance_from_home: Optional[float] = None  # Renamed from radius_miles for clarity
 
-    # Environment Preferences
-    urbanization_pref: Optional[str] = "no_preference"
-    size_pref: Optional[str] = "no_preference"
+    # Environment Preferences (multi-select: a school matching ANY selected
+    # option passes; empty list = no preference)
+    urbanization_pref: List[str] = field(default_factory=list)
+    size_pref: List[str] = field(default_factory=list)
     institution_type_pref: Optional[str] = "either"
     carnegie_pref: Optional[List[str]] = None
-    msi_preference: Optional[str] = "no_preference"
+    msi_preference: List[str] = field(default_factory=list)
 
     # Academic Environment
     research_opportunities: bool = False
@@ -391,10 +429,10 @@ class UserProfile:
         lines.extend([
             "",
             "ENVIRONMENT PREFERENCES",
-            f"  Urbanization: {self.urbanization_pref}",
-            f"  Size: {self.size_pref}",
+            f"  Urbanization: {', '.join(self.urbanization_pref) or 'no preference'}",
+            f"  Size: {', '.join(self.size_pref) or 'no preference'}",
             f"  Institution Type: {self.institution_type_pref}",
-            f"  MSI Interest: {self.msi_preference}",
+            f"  MSI Interest: {', '.join(self.msi_preference) or 'no preference'}",
             "",
             "ACADEMIC PRIORITIES",
             f"  Research Opportunities: {self.research_opportunities}",
@@ -516,7 +554,7 @@ FIRST_GEN_HSI_INTEREST = UserProfile(
     preferred_states=["TX", "CA", "AZ", "NM"],
 
     # Preferences
-    msi_preference="HSI",
+    msi_preference=["HSI"],
     strong_support_services=True,
     institution_type_pref="either",
 

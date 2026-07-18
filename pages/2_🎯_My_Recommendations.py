@@ -415,45 +415,46 @@ def main():
         st.divider()
         st.subheader("💬 Ask Questions About Your Recommendations")
 
-        # Stay expanded once a conversation exists, so the answer that arrives
-        # after the rerun isn't hidden behind a collapsed expander
-        with st.expander("**Open Q&A Chat**",
-                         expanded=bool(st.session_state.get('qa_chat_history'))):
-            st.markdown("""
-            Ask me anything about your recommended colleges! For example:
-            - "Which of these schools has the best ROI?"
-            - "Tell me more about the schools in California"
-            - "Which schools are best for STEM majors?"
-            """)
+        st.markdown("""
+        Ask me anything about your recommended colleges! For example:
+        - "Which of these schools has the best ROI?"
+        - "Tell me more about the schools in California"
+        - "Which schools are best for STEM majors?"
+        """)
 
-            # Check for API key
-            api_key = get_anthropic_api_key()
-            if not api_key:
-                st.warning("⚠️ Anthropic API key not found. Set ANTHROPIC_API_KEY in your .env file to use the Q&A feature.")
-            else:
-                # Initialize chat history
-                if 'qa_chat_history' not in st.session_state:
-                    st.session_state.qa_chat_history = []
+        # Check for API key
+        api_key = get_anthropic_api_key()
+        if not api_key:
+            st.warning("⚠️ Anthropic API key not found. Set ANTHROPIC_API_KEY in your .env file to use the Q&A feature.")
+        else:
+            # Initialize chat history
+            if 'qa_chat_history' not in st.session_state:
+                st.session_state.qa_chat_history = []
 
-                # Display chat history (new messages are appended and shown via
-                # st.rerun, so everything always renders above the input box)
+            # All messages render inside this container, which sits above
+            # the chat input — including the live-streamed reply below
+            chat_area = st.container()
+            with chat_area:
                 for msg in st.session_state.qa_chat_history:
                     with st.chat_message(msg["role"]):
                         st.write(msg["content"])
 
-                # Chat input stays the last element in the expander
-                if question := st.chat_input("Ask a question about your recommendations..."):
-                    st.session_state.qa_chat_history.append({"role": "user", "content": question})
+            if question := st.chat_input("Ask a question about your recommendations..."):
+                st.session_state.qa_chat_history.append({"role": "user", "content": question})
 
-                    with st.spinner("Thinking..."):
+                with chat_area:
+                    with st.chat_message("user"):
+                        st.write(question)
+
+                    with st.chat_message("assistant"):
                         try:
                             import anthropic
 
                             client = anthropic.Anthropic(api_key=api_key)
 
-                            # System prompt carries the recommendations context;
-                            # the full chat history goes in messages so
-                            # follow-up questions keep their context
+                            # System prompt carries the recommendations
+                            # context; the full chat history goes in
+                            # messages so follow-ups keep their context
                             context = f"You are helping a student understand their {len(recommendations)} college recommendations. "
                             context += "Here are the top 5 recommendations:\n\n"
 
@@ -464,7 +465,8 @@ def main():
                                 state = safe_get(row, 'State of Institution', 'Unknown')
                                 context += f"{idx}. {inst_name} ({city}, {state}) - Match Score: {composite:.3f}\n"
 
-                            response = client.messages.create(
+                            # Stream tokens into the page as they arrive
+                            with client.messages.stream(
                                 model=get_anthropic_model(),
                                 max_tokens=1000,
                                 system=context,
@@ -472,16 +474,14 @@ def main():
                                     {"role": m["role"], "content": m["content"]}
                                     for m in st.session_state.qa_chat_history
                                 ]
-                            )
-
-                            answer = response.content[0].text
-                            st.session_state.qa_chat_history.append({"role": "assistant", "content": answer})
+                            ) as stream:
+                                answer = st.write_stream(stream.text_stream)
 
                         except Exception as e:
-                            error_msg = f"Error generating response: {str(e)}"
-                            st.session_state.qa_chat_history.append({"role": "assistant", "content": error_msg})
+                            answer = f"Error generating response: {str(e)}"
+                            st.error(answer)
 
-                    st.rerun()
+                st.session_state.qa_chat_history.append({"role": "assistant", "content": answer})
 
     # Info box at bottom
     st.divider()

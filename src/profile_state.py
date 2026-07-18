@@ -51,10 +51,10 @@ def initialize_shared_profile():
             'max_distance_from_home': None,
 
             # Environment
-            'urbanization_pref': 'no_preference',
-            'size_pref': 'no_preference',
+            'urbanization_pref': [],
+            'size_pref': [],
             'institution_type_pref': 'either',
-            'msi_preference': 'no_preference',
+            'msi_preference': [],
 
             # Academic priorities
             'research_opportunities': False,

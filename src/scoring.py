@@ -144,44 +144,39 @@ def filter_colleges_for_user(df: pd.DataFrame, profile: UserProfile) -> pd.DataF
             ]
             print(f"  After selectivity filter ({', '.join(selectivity_buckets)} + missing): {len(filtered)} institutions (removed {before_count - len(filtered)})")
 
-    # 6. SIZE PREFERENCE
-    if profile.size_pref and profile.size_pref != "no_preference":
-        if 'size_category' in filtered.columns:
-            # Map preference to category
-            size_map = {
-                "small": 1,
-                "medium": 2,
-                "large": [3, 4, 5]
-            }
-            if profile.size_pref.lower() in size_map:
-                before_count = len(filtered)
-                target_sizes = size_map[profile.size_pref.lower()]
-                if not isinstance(target_sizes, list):
-                    target_sizes = [target_sizes]
-                # Include schools with matching size OR missing size data
-                filtered = filtered[
-                    pd.to_numeric(filtered['size_category'], errors='coerce').isin(target_sizes) |
-                    pd.to_numeric(filtered['size_category'], errors='coerce').isna()
-                ]
-                print(f"  After size filter ({profile.size_pref} + missing): {len(filtered)} institutions (removed {before_count - len(filtered)})")
-
-    # 7. URBANIZATION PREFERENCE
-    if profile.urbanization_pref and profile.urbanization_pref != "no_preference":
-        # Use binary flags created in environment features
-        urban_map = {
-            "urban": "is_urban",
-            "suburban": "is_suburban",
-            "rural": "is_rural"
-        }
-        flag_col = urban_map.get(profile.urbanization_pref.lower())
-        if flag_col and flag_col in filtered.columns:
+    # 6. SIZE PREFERENCE (multi-select: match any chosen size, keep missing data)
+    if profile.size_pref and 'size_category' in filtered.columns:
+        size_map = {"small": [1], "medium": [2], "large": [3, 4, 5]}
+        target_sizes = [code for pref in profile.size_pref
+                        for code in size_map.get(pref.lower(), [])]
+        if target_sizes:
             before_count = len(filtered)
-            # Include matching urbanization OR missing data
-            filtered = filtered[
-                (filtered[flag_col] == 1) |
-                pd.to_numeric(filtered[flag_col], errors='coerce').isna()
-            ]
-            print(f"  After urbanization filter ({profile.urbanization_pref} + missing): {len(filtered)} institutions (removed {before_count - len(filtered)})")
+            size_numeric = pd.to_numeric(filtered['size_category'], errors='coerce')
+            filtered = filtered[size_numeric.isin(target_sizes) | size_numeric.isna()]
+            print(f"  After size filter ({', '.join(profile.size_pref)} + missing): {len(filtered)} institutions (removed {before_count - len(filtered)})")
+
+    # 7. URBANIZATION PREFERENCE (multi-select: match any chosen setting).
+    # "town" has no binary flag, so match it via the raw locale codes (31-33).
+    if profile.urbanization_pref:
+        urban_map = {"urban": "is_urban", "suburban": "is_suburban", "rural": "is_rural"}
+        flag_cols = [urban_map[pref.lower()] for pref in profile.urbanization_pref
+                     if pref.lower() in urban_map and urban_map[pref.lower()] in filtered.columns]
+        wants_town = any(pref.lower() == "town" for pref in profile.urbanization_pref)
+
+        match = pd.Series(False, index=filtered.index)
+        for flag_col in flag_cols:
+            match |= (filtered[flag_col] == 1)
+        if wants_town and 'urbanization' in filtered.columns:
+            match |= pd.to_numeric(filtered['urbanization'], errors='coerce').isin([31, 32, 33])
+
+        if flag_cols or wants_town:
+            before_count = len(filtered)
+            # Keep matches and schools with missing urbanization data
+            missing = pd.to_numeric(
+                filtered.get('urbanization', pd.Series(index=filtered.index)),
+                errors='coerce').isna()
+            filtered = filtered[match | missing]
+            print(f"  After urbanization filter ({', '.join(profile.urbanization_pref)} + missing): {len(filtered)} institutions (removed {before_count - len(filtered)})")
 
     # 8. CARNEGIE TYPE PREFERENCE
     if profile.carnegie_pref:
@@ -201,30 +196,25 @@ def filter_colleges_for_user(df: pd.DataFrame, profile: UserProfile) -> pd.DataF
             filtered = filtered[has_match]
             print(f"  After Carnegie type filter: {len(filtered)} institutions")
 
-    # 9. MSI PREFERENCE
-    if profile.msi_preference and profile.msi_preference != "no_preference":
-        msi_flags = {
-            "HBCU": "HBCU",
-            "HSI": "HSI",
-            "Tribal": "TRIBAL",
-            "AANAPII": "AANAPII",
-            "PBI": "PBI"
-        }
+    # 9. MSI PREFERENCE (multi-select: match any selected MSI type)
+    if profile.msi_preference:
+        msi_flags = {"HBCU": "HBCU", "HSI": "HSI", "TRIBAL": "TRIBAL",
+                     "AANAPII": "AANAPII", "PBI": "PBI"}
+        selected = [pref.upper() for pref in profile.msi_preference]
 
-        if profile.msi_preference.upper() in msi_flags:
-            flag_col = msi_flags[profile.msi_preference.upper()]
+        if "ANY_MSI" in selected:
+            target_cols = list(msi_flags.values())
+        else:
+            target_cols = [msi_flags[pref] for pref in selected if pref in msi_flags]
+
+        msi_match = pd.Series(False, index=filtered.index)
+        for flag_col in target_cols:
             if flag_col in filtered.columns:
-                filtered = filtered[pd.to_numeric(filtered[flag_col], errors='coerce') == 1]
-                print(f"  After MSI filter ({profile.msi_preference}): {len(filtered)} institutions")
-        elif profile.msi_preference.lower() == "any_msi":
-            # Include any MSI
-            msi_match = pd.Series(False, index=filtered.index)
-            for flag_col in msi_flags.values():
-                if flag_col in filtered.columns:
-                    msi_match |= (pd.to_numeric(filtered[flag_col], errors='coerce') == 1)
-            if msi_match.any():
-                filtered = filtered[msi_match]
-                print(f"  After any MSI filter: {len(filtered)} institutions")
+                msi_match |= (pd.to_numeric(filtered[flag_col], errors='coerce') == 1)
+
+        if msi_match.any():
+            filtered = filtered[msi_match]
+            print(f"  After MSI filter ({', '.join(profile.msi_preference)}): {len(filtered)} institutions")
 
     # 10. MINIMUM GRADUATION RATE
     if profile.min_graduation_rate:
@@ -250,7 +240,7 @@ def filter_colleges_for_user(df: pd.DataFrame, profile: UserProfile) -> pd.DataF
         print("Suggestions:")
         print("  1. Increase your annual budget")
         print("  2. Remove geographic restrictions (in-state only, preferred states)")
-        print("  3. Set preferences to 'no_preference' or 'either'")
+        print("  3. Clear setting/size/MSI preferences (empty = no preference)")
         print("  4. Include more selectivity buckets (reach, target, safety, open)")
         print("  5. Remove MSI preference filter if set")
         print()
@@ -339,13 +329,14 @@ def calculate_personalized_equity(row: pd.Series, profile: UserProfile) -> float
     # Combine: 70% race-specific, 30% parity
     equity_score = 0.7 * race_specific_norm + 0.3 * parity
 
-    # Small bonus for MSI match (if applicable)
-    if profile.msi_preference and profile.msi_preference != "no_preference":
-        msi_flags = {"HBCU": "HBCU", "HSI": "HSI", "Tribal": "TRIBAL", "AANAPII": "AANAPII"}
-        if profile.msi_preference.upper() in msi_flags:
-            flag_col = msi_flags[profile.msi_preference.upper()]
-            if flag_col in row.index and pd.to_numeric(row.get(flag_col, 0), errors='coerce') == 1:
+    # Small bonus if the school matches any selected MSI type
+    if profile.msi_preference:
+        msi_flags = {"HBCU": "HBCU", "HSI": "HSI", "TRIBAL": "TRIBAL", "AANAPII": "AANAPII"}
+        for pref in profile.msi_preference:
+            flag_col = msi_flags.get(pref.upper())
+            if flag_col and flag_col in row.index and pd.to_numeric(row.get(flag_col, 0), errors='coerce') == 1:
                 equity_score = min(1.0, equity_score * 1.1)  # 10% bonus
+                break
 
     return equity_score
 
@@ -451,28 +442,20 @@ def calculate_personalized_environment_fit(row: pd.Series, profile: UserProfile)
     matches = 0
     checks = 0
 
-    # Size match
-    if profile.size_pref and profile.size_pref != "no_preference":
+    # Size match (any selected size counts)
+    if profile.size_pref:
         checks += 1
-        size_flags = {
-            "small": "size_small",
-            "medium": "size_medium",
-            "large": "size_large"
-        }
-        flag_col = size_flags.get(profile.size_pref.lower())
-        if flag_col and row.get(flag_col, 0) == 1:
+        size_flags = {"small": "size_small", "medium": "size_medium", "large": "size_large"}
+        if any(row.get(size_flags.get(pref.lower(), ''), 0) == 1
+               for pref in profile.size_pref):
             matches += 1
 
-    # Urbanization match
-    if profile.urbanization_pref and profile.urbanization_pref != "no_preference":
+    # Urbanization match (any selected setting counts)
+    if profile.urbanization_pref:
         checks += 1
-        urban_flags = {
-            "urban": "is_urban",
-            "suburban": "is_suburban",
-            "rural": "is_rural"
-        }
-        flag_col = urban_flags.get(profile.urbanization_pref.lower())
-        if flag_col and row.get(flag_col, 0) == 1:
+        urban_flags = {"urban": "is_urban", "suburban": "is_suburban", "rural": "is_rural"}
+        if any(row.get(urban_flags.get(pref.lower(), ''), 0) == 1
+               for pref in profile.urbanization_pref):
             matches += 1
 
     # Calculate match bonus
