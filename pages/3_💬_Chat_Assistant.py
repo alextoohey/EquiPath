@@ -30,7 +30,7 @@ def main():
     # Title
     st.title("💬 Chat Assistant")
     st.markdown("""
-    **Build your profile through a guided chat — with optional voice input and output.**
+    **Build your profile through a guided chat, with optional voice input and output.**
 
     Your profile persists across all pages - build it here, then get recommendations
     on the **My Recommendations** page.

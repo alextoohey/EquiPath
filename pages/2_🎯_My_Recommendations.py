@@ -249,21 +249,21 @@ def main():
                 Each college gets seven **fit scores from 0 to 1** (higher = better fit for *you*),
                 and your match score is the weighted average using the percentages above.
 
-                - **Affordability** — how cheap the school is for a family like yours (net price and
+                - **Affordability**: how cheap the school is for a family like yours (net price and
                   affordability gap; childcare-adjusted if you're a student-parent). This is an
                   *absolute* cost score: raising your budget widens which schools pass the filter,
                   but doesn't make expensive schools score better. If cost matters less to you,
                   lower the **Affordability weight** in My Profile instead.
-                - **ROI** — graduates' median earnings 10 years out vs. median debt.
-                - **Equity** — the school's graduation rate for students like you (your group's rate
+                - **ROI**: graduates' median earnings 10 years out vs. median debt.
+                - **Equity**: the school's graduation rate for students like you (your group's rate
                   if you shared race/ethnicity, the overall rate otherwise), plus how equal outcomes
                   are across groups.
-                - **Support** — student-faculty ratio, instructional spending, and experience
+                - **Support**: student-faculty ratio, instructional spending, and experience
                   supporting low-income and nontraditional students.
-                - **Academic** — strength in your intended major and research intensity.
-                - **Environment** — how well size/setting match your preferences.
-                - **Access** — your *odds of getting in*, based on the admission rate and your GPA.
-                  Highly selective schools score near 0 here for everyone — a 4% admit rate is a
+                - **Academic**: strength in your intended major and research intensity.
+                - **Environment**: how well size/setting match your preferences.
+                - **Access**: your *odds of getting in*, based on the admission rate and your GPA.
+                  Highly selective schools score near 0 here for everyone; a 4% admit rate is a
                   long shot even with a 4.0. That's honesty, not an error; it's also why Access
                   carries only ~5% weight by default.
 
@@ -369,7 +369,7 @@ def main():
                               help="How well the campus size and setting match your preferences.")
                 with col7:
                     st.metric("Access", f"{safe_get(row, 'personalized_access', 0):.2f}",
-                              help="Your odds of admission. Highly selective schools score near 0 for everyone — a 4% admit rate is a long shot even with a 4.0 GPA.")
+                              help="Your odds of admission. Highly selective schools score near 0 for everyone; a 4% admit rate is a long shot even with a 4.0 GPA.")
 
                 # Details
                 st.markdown("### 📊 Additional Details")
