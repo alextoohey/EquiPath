@@ -2,20 +2,21 @@
 
 **Equity-centered college matching for the students who need it most.**
 
-🏆 First Place, Most Creative Project — Educational Equity Track (sponsored by Snowflake), 7th Annual Datathon for Social Good @ UC Berkeley
+🏆 First Place for Most Creative Project in the Educational Equity Track (sponsored by Snowflake), 7th Annual Datathon for Social Good @ UC Berkeley
 
 <!-- Once deployed: replace # with your Streamlit Cloud URL -->
 **[Live demo](#)** · [Quick start](#quick-start) · [How the matching works](#how-the-matching-works) · [Architecture](#architecture)
 
 ![Personalized recommendations with AI explanations](docs/screenshots/recommendations.png)
+*Top matches for a first-generation Latina student-parent in California with a $12k budget, public schools only: UC Davis ($8,594 net price for this family, 49% admission rate, 87% graduation rate), then CSU San Bernardino, a Hispanic-Serving Institution at $3,298 with a 91% admission rate. Ranked by what she'd actually pay and her odds of getting in and graduating, not prestige.*
 
 ## Why
 
-College search tools rank schools by prestige. But for a first-generation student, a student-parent, or a student from a low-income family, the question isn't "what's the highest-ranked school I can get into" — it's "where will I actually graduate, without drowning in debt?"
+College search tools rank schools by prestige. But for a first-generation student, a student-parent, or a student from a low-income family, the question isn't "what's the highest-ranked school I can get into." It's "where will I actually graduate, without drowning in debt?"
 
 The data says that question matters. In the federal datasets behind this project:
 
-- Schools serving the highest-income students graduate **74.5%** of them in 6 years; schools serving the lowest-income students graduate **34.7%** — a 39.8-point gap.
+- Schools serving the highest-income students graduate **74.5%** of them in 6 years; schools serving the lowest-income students graduate **34.7%**, a 39.8-point gap.
 - The median student-parent faces a **$26,931** annual affordability gap once childcare is factored in, nearly 3× the $9,610 gap for other students.
 - Black students graduate at rates ~12 points below white students at the same set of institutions.
 
@@ -49,11 +50,13 @@ Every institution gets seven normalized scores, computed from federal data (no o
 | Environment | 6% | Size/setting match + student-body diversity |
 | Access | 5% | Admission likelihood given the student's GPA and test scores |
 
-The weights adapt to the student — they're seeded from stated priorities and shift for circumstances (a student-parent's affordability score uses the childcare-adjusted gap; a first-gen student's support score amplifies high-support schools). Hard constraints (budget, in-state, institution type, minority-serving institution preference, distance from home zip code) filter before any scoring happens, and for-profit institutions are excluded by default.
+The weights adapt to the student: they're seeded from stated priorities and shift for circumstances (a student-parent's affordability score uses the childcare-adjusted gap; a first-gen student's support score amplifies high-support schools). Hard constraints (budget, in-state, institution type, minority-serving institution preference, distance from home zip code) filter before any scoring happens, and for-profit institutions are excluded by default.
+
+A side effect worth noticing: highly selective schools sometimes surface for low-income students, not because of prestige but because full-need financial aid makes them among the *cheapest* options in the dataset (Stanford's net price for the lowest income bracket is effectively $0). The Access score keeps expectations honest by scoring admission odds near zero at such schools, and students who prefer a likelier path can filter or reweight accordingly.
 
 Two design rules kept us honest:
 
-1. **The algorithm decides, the AI explains.** Rankings come from deterministic, auditable scoring — Claude is only used to translate the numbers into plain language and answer questions about the results.
+1. **The algorithm decides, the AI explains.** Rankings come from deterministic, auditable scoring; Claude is only used to translate the numbers into plain language and answer questions about the results.
 2. **Demographics only ever help.** Race/ethnicity is optional and used solely to surface the graduation rate for the student's own group and to match minority-serving institutions.
 
 ## Quick start
@@ -65,7 +68,7 @@ pip install -r requirements.txt
 streamlit run Home.py
 ```
 
-That's it — the datasets ship with the repo, and the first run builds a Parquet cache (~30 seconds; instant after that).
+That's it: the datasets ship with the repo, and the first run builds a Parquet cache (~30 seconds; instant after that).
 
 The AI features (match explanations, Q&A chat) are optional. To enable them:
 
@@ -87,7 +90,7 @@ The app runs as-is on [Streamlit Community Cloud](https://share.streamlit.io) (f
 | Affordability Gap AY2022-23 | Net price and affordability gaps per institution across five family-income brackets, including student-parent scenarios with childcare costs |
 | NCES Postsecondary School Locations 2022-23 | Coordinates for the 6,812 schools on the map |
 
-The two tabular datasets are joined on UNITID (the federal institution ID) and filtered to the income bracket matching the student's family income, yielding one row per institution — 4,933 institutions with ~290 features.
+The two tabular datasets are joined on UNITID (the federal institution ID) and filtered to the income bracket matching the student's family income, yielding one row per institution: 4,933 institutions with ~290 features.
 
 ## Architecture
 
@@ -124,9 +127,9 @@ flowchart LR
 
 ## Where this could go
 
-- **Persistent profiles** — session state currently lives in memory, so a browser refresh starts over; a database plus lightweight auth would make profiles and saved searches durable.
-- **A learned success model** — with outcome data (graduation, debt, earnings for students *like this one* at schools *like this one*), a supervised model could join the seven indices as an eighth, predictive score.
-- **More data** — admission-rate coverage is ~35%; transfer pathways and campus support services (childcare, mental health) would sharpen the support index.
+- **Persistent profiles**: session state currently lives in memory, so a browser refresh starts over; a database plus lightweight auth would make profiles and saved searches durable.
+- **A learned success model**: with outcome data (graduation, debt, earnings for students *like this one* at schools *like this one*), a supervised model could join the seven indices as an eighth, predictive score.
+- **More data**: admission-rate coverage is ~35%; transfer pathways and campus support services (childcare, mental health) would sharpen the support index.
 
 ## Team
 
