@@ -221,19 +221,50 @@ def main():
             st.markdown("### 📊 Your Personalized Scoring Weights")
             col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
             with col1:
-                st.metric("Affordability", f"{weights['affordability']:.1%}")
+                st.metric("Affordability", f"{weights['affordability']:.1%}",
+                          help="How much cost counts in your ranking. Lower this if budget isn't a constraint for you.")
             with col2:
-                st.metric("ROI", f"{weights['roi']:.1%}")
+                st.metric("ROI", f"{weights['roi']:.1%}",
+                          help="How much earnings-vs-debt outcomes count in your ranking.")
             with col3:
-                st.metric("Equity", f"{weights['equity']:.1%}")
+                st.metric("Equity", f"{weights['equity']:.1%}",
+                          help="How much graduation outcomes (for your demographic group, if provided) count in your ranking.")
             with col4:
-                st.metric("Support", f"{weights['support']:.1%}")
+                st.metric("Support", f"{weights['support']:.1%}",
+                          help="How much student-support infrastructure counts in your ranking.")
             with col5:
-                st.metric("Academic", f"{weights['academic_fit']:.1%}")
+                st.metric("Academic", f"{weights['academic_fit']:.1%}",
+                          help="How much program strength in your intended major counts in your ranking.")
             with col6:
-                st.metric("Environment", f"{weights['environment']:.1%}")
+                st.metric("Environment", f"{weights['environment']:.1%}",
+                          help="How much campus size/setting fit counts in your ranking.")
             with col7:
-                st.metric("Access", f"{weights['access']:.1%}")
+                st.metric("Access", f"{weights['access']:.1%}",
+                          help="How much your admission odds count in your ranking.")
+
+            with st.expander("ℹ️ How to read these scores"):
+                st.markdown("""
+                Each college gets seven **fit scores from 0 to 1** (higher = better fit for *you*),
+                and your match score is the weighted average using the percentages above.
+
+                - **Affordability** — how cheap the school is for a family like yours (net price and
+                  affordability gap; childcare-adjusted if you're a student-parent). This is an
+                  *absolute* cost score: raising your budget widens which schools pass the filter,
+                  but doesn't make expensive schools score better. If cost matters less to you,
+                  lower the **Affordability weight** in My Profile instead.
+                - **ROI** — graduates' median earnings 10 years out vs. median debt.
+                - **Equity** — the school's graduation rate for students like you (your group's rate
+                  if you shared race/ethnicity, the overall rate otherwise), plus how equal outcomes
+                  are across groups.
+                - **Support** — student-faculty ratio, instructional spending, and experience
+                  supporting low-income and nontraditional students.
+                - **Academic** — strength in your intended major and research intensity.
+                - **Environment** — how well size/setting match your preferences.
+                - **Access** — your *odds of getting in*, based on the admission rate and your GPA.
+                  Highly selective schools score near 0 here for everyone — a 4% admit rate is a
+                  long shot even with a 4.0. That's honesty, not an error; it's also why Access
+                  carries only ~5% weight by default.
+                """)
 
         st.divider()
 
@@ -304,22 +335,29 @@ def main():
                     st.metric("Median Debt", format_currency(debt))
 
                 # Fit scores
-                st.markdown("**Your Personalized Fit Scores:**")
+                st.markdown("**Your Personalized Fit Scores** (0-1, higher = better fit for you):")
                 col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
                 with col1:
-                    st.metric("Affordability", f"{safe_get(row, 'personalized_affordability', 0):.2f}")
+                    st.metric("Affordability", f"{safe_get(row, 'personalized_affordability', 0):.2f}",
+                              help="How affordable this school is for a family like yours (absolute cost, not relative to your budget).")
                 with col2:
-                    st.metric("ROI", f"{safe_get(row, 'roi_score', 0):.2f}")
+                    st.metric("ROI", f"{safe_get(row, 'roi_score', 0):.2f}",
+                              help="Graduates' median earnings 10 years out vs. median debt.")
                 with col3:
-                    st.metric("Equity", f"{safe_get(row, 'personalized_equity', 0):.2f}")
+                    st.metric("Equity", f"{safe_get(row, 'personalized_equity', 0):.2f}",
+                              help="Graduation rate for students like you, plus outcome parity across groups.")
                 with col4:
-                    st.metric("Support", f"{safe_get(row, 'personalized_support', 0):.2f}")
+                    st.metric("Support", f"{safe_get(row, 'personalized_support', 0):.2f}",
+                              help="Student-support infrastructure: faculty ratio, instructional spend, low-income and nontraditional-student experience.")
                 with col5:
-                    st.metric("Academic", f"{safe_get(row, 'personalized_academic_fit', 0):.2f}")
+                    st.metric("Academic", f"{safe_get(row, 'personalized_academic_fit', 0):.2f}",
+                              help="Program strength in your intended major and research intensity.")
                 with col6:
-                    st.metric("Environment", f"{safe_get(row, 'personalized_environment', 0):.2f}")
+                    st.metric("Environment", f"{safe_get(row, 'personalized_environment', 0):.2f}",
+                              help="How well the campus size and setting match your preferences.")
                 with col7:
-                    st.metric("Access", f"{safe_get(row, 'personalized_access', 0):.2f}")
+                    st.metric("Access", f"{safe_get(row, 'personalized_access', 0):.2f}",
+                              help="Your odds of admission. Highly selective schools score near 0 for everyone — a 4% admit rate is a long shot even with a 4.0 GPA.")
 
                 # Details
                 st.markdown("### 📊 Additional Details")
@@ -406,8 +444,8 @@ def main():
                        use_container_width=True,
                        type="primary",
                        key="view_recommendations_on_map"):
-                # Store recommendations in session state for map page
-                st.session_state.recommended_colleges = recommendations
+                # Map reads current_recommendations; just default it to the
+                # recommended view
                 st.session_state.show_only_recommended = True
                 st.switch_page("pages/4_🗺️_School_Map.py")
 
@@ -452,18 +490,23 @@ def main():
 
                             client = anthropic.Anthropic(api_key=api_key)
 
-                            # System prompt carries the recommendations
-                            # context; the full chat history goes in
+                            # System prompt carries the student profile and
+                            # per-school metrics; the chat history goes in
                             # messages so follow-ups keep their context
-                            context = f"You are helping a student understand their {len(recommendations)} college recommendations. "
-                            context += "Here are the top 5 recommendations:\n\n"
-
-                            for idx, (_, row) in enumerate(recommendations.head(5).iterrows(), 1):
-                                inst_name = row.get('Institution Name', row.get('INSTNM', 'Unknown'))
-                                composite = row.get('composite_score', 0)
-                                city = safe_get(row, 'City', 'Unknown')
-                                state = safe_get(row, 'State of Institution', 'Unknown')
-                                context += f"{idx}. {inst_name} ({city}, {state}) - Match Score: {composite:.3f}\n"
+                            import json
+                            summary = build_recommendation_summary(
+                                profile, recommendations,
+                                top_k=min(10, len(recommendations)))
+                            context = (
+                                "You are EquiPath's advisor, helping a student understand "
+                                f"their {len(recommendations)} personalized college recommendations. "
+                                "Below is their profile and the detailed metrics behind their "
+                                "top matches (all scores are 0-1, higher = better fit). Use this "
+                                "data to answer specifically; be warm, honest, and concise. "
+                                "Write dollar amounts without the dollar sign (e.g., 2,895 "
+                                "per year) — the chat display renders '$' as math notation.\n\n"
+                                + json.dumps(summary, indent=2)
+                            )
 
                             # Stream tokens into the page as they arrive
                             with client.messages.stream(

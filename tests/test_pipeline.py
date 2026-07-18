@@ -119,6 +119,32 @@ def test_normalize_state():
     assert normalize_state(None) is None
 
 
+def test_normalize_state_tolerates_typos():
+    assert normalize_state("Califrnia") == "CA"
+    assert normalize_state("Massachusets") == "MA"
+    assert normalize_state("west virgina") == "WV"
+    assert normalize_state("Zzzz") is None
+
+
+def test_equity_uses_overall_grad_rate_when_race_unspecified(colleges):
+    """Without a race, equity should reflect the school's overall graduation
+    rate — not a flat constant that makes a 97%-graduation school and a
+    20%-graduation school look identical."""
+    profile = UserProfile(gpa=3.5, annual_budget=30000)  # race defaults to PREFER_NOT_TO_SAY
+    recs = rank_colleges_for_user(colleges, profile, top_k=len(colleges))
+
+    harvard = recs[recs['Institution Name'] == 'Harvard University']
+    assert len(harvard) == 1
+    row = harvard.iloc[0]
+    # 0.7 * grad_rate_total_norm (0.97) + 0.3 * parity — far above the old 0.35 + 0.3*parity floor
+    assert row['personalized_equity'] > 0.8
+
+    # A strong default profile should now surface high-graduation institutions
+    top_names = set(recs.head(10)['Institution Name'])
+    assert top_names & {'Harvard University', 'Stanford University', 'Princeton University',
+                        'Williams College', 'Johns Hopkins University'}
+
+
 def test_multiselect_size_filter_matches_any(colleges):
     profile = UserProfile(gpa=3.0, annual_budget=40000, size_pref=["small", "medium"])
     filtered = filter_colleges_for_user(colleges, profile)

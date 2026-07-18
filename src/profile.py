@@ -10,6 +10,7 @@ Captures the student dimensions used for personalized matching:
 - Special populations (international, nontraditional, etc.)
 """
 
+import difflib
 from dataclasses import dataclass, field
 from typing import Literal, Optional, List
 
@@ -39,8 +40,8 @@ def normalize_state(value):
     """
     Normalize a state name or code to a USPS two-letter code.
 
-    Returns None for anything unrecognized ("California" -> "CA",
-    "ca" -> "CA", "Narnia" -> None).
+    Tolerates typos in full names via fuzzy matching ("California" -> "CA",
+    "ca" -> "CA", "Califrnia" -> "CA", "Narnia" -> None).
     """
     if not value or not isinstance(value, str):
         return None
@@ -48,7 +49,14 @@ def normalize_state(value):
     if cleaned in STATE_NAME_TO_CODE:
         return STATE_NAME_TO_CODE[cleaned]
     code = cleaned.upper()
-    return code if code in VALID_STATE_CODES else None
+    if code in VALID_STATE_CODES:
+        return code
+
+    # Tolerate typos ("califrnia" -> CA) via closest-match on full names
+    close = difflib.get_close_matches(cleaned, STATE_NAME_TO_CODE.keys(), n=1, cutoff=0.75)
+    if close:
+        return STATE_NAME_TO_CODE[close[0]]
+    return None
 
 
 @dataclass

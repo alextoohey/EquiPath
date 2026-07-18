@@ -8,6 +8,7 @@ Answers sync to the shared profile state so every page sees the same profile.
 """
 
 import base64
+import difflib
 import os
 import re
 
@@ -673,15 +674,23 @@ def process_user_answer(user_input, question_config, profile_data):
             picks = []
             parts = [piece for chunk in user_input.split(',')
                      for piece in chunk.split(' and ')]
+            option_lookup = {opt.lower(): opt for opt in options}
             for part in parts:
                 part = part.strip().lower()
                 if not part:
                     continue
+                matched = None
                 for option in options:
                     if option.lower() == part or option.lower() in part or part in option.lower():
-                        if option not in picks:
-                            picks.append(option)
+                        matched = option
                         break
+                if not matched:
+                    # Tolerate typos ("surban" -> suburban)
+                    close = difflib.get_close_matches(part, option_lookup.keys(), n=1, cutoff=0.75)
+                    if close:
+                        matched = option_lookup[close[0]]
+                if matched and matched not in picks:
+                    picks.append(matched)
 
             return picks if picks else None
 
@@ -798,6 +807,12 @@ def process_user_answer(user_input, question_config, profile_data):
             for option in options:
                 if any(word in user_lower for word in option.lower().split()):
                     return option
+
+            # Final fallback: tolerate typos ("busness" -> Business)
+            option_lookup = {opt.lower(): opt for opt in options}
+            close = difflib.get_close_matches(user_lower, option_lookup.keys(), n=1, cutoff=0.75)
+            if close:
+                return option_lookup[close[0]]
 
             return None
 

@@ -34,10 +34,11 @@ def main():
     # Title and description
     st.title("🗺️ U.S. Postsecondary Schools Interactive Map")
 
-    # Recommendations arrive via session state from the My Recommendations page
+    # Recommendations generated on the My Recommendations page are shared via
+    # session state, so the toggle appears however the user navigates here
     has_recommendations = (
-        'recommended_colleges' in st.session_state
-        and st.session_state.recommended_colleges is not None
+        st.session_state.get('current_recommendations') is not None
+        and len(st.session_state.current_recommendations) > 0
     )
 
     if has_recommendations:
@@ -88,7 +89,7 @@ def main():
 
         # Get recommendations if in recommended mode
         if show_mode == "recommended":
-            recommendations_df = st.session_state.recommended_colleges
+            recommendations_df = st.session_state.current_recommendations
 
             # Get set of recommended school names if we have recommendations
             if recommendations_df is not None and len(recommendations_df) > 0:

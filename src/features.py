@@ -113,6 +113,17 @@ def add_equity_scores(df):
             df[f'grad_rate_{race.lower()}_norm'] = min_max_normalize(
                 df[col].fillna(fill_value if pd.notna(fill_value) else 50))
 
+    # Overall graduation rate, used as the equity fallback when a student
+    # doesn't specify race/ethnicity
+    total_col = "Bachelor's Degree Graduation Rate Bachelor Degree Within 6 Years - Total"
+    if total_col in df.columns:
+        df[total_col] = pd.to_numeric(df[total_col], errors='coerce')
+        total_fill = df[total_col].median()
+        df['grad_rate_total_norm'] = min_max_normalize(
+            df[total_col].fillna(total_fill if pd.notna(total_fill) else 50))
+    else:
+        df['grad_rate_total_norm'] = 0.5
+
     grad_cols_present = [col for col in race_grad_cols.values() if col in df.columns]
 
     if grad_cols_present:

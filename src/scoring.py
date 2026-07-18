@@ -312,16 +312,17 @@ def calculate_personalized_equity(row: pd.Series, profile: UserProfile) -> float
         'PACIFIC': 'grad_rate_pacific_norm'
     }
 
-    # Get race-specific grad rate if available
+    # Use the race-specific graduation rate when race is given; otherwise
+    # fall back to the school's overall graduation rate so institutional
+    # outcomes still count (a flat constant here would make a 97%-graduation
+    # school and a 20%-graduation school look identical)
     if profile.race_ethnicity and profile.race_ethnicity != "PREFER_NOT_TO_SAY":
         grad_col = race_to_col.get(profile.race_ethnicity)
-        if grad_col and grad_col in row.index:
-            race_specific_norm = row.get(grad_col, 0.5)
-        else:
-            race_specific_norm = 0.5
+        race_specific_norm = row.get(grad_col) if grad_col else None
+        if race_specific_norm is None or pd.isna(race_specific_norm):
+            race_specific_norm = row.get('grad_rate_total_norm', 0.5)
     else:
-        # Use overall equity parity if no race specified
-        race_specific_norm = 0.5
+        race_specific_norm = row.get('grad_rate_total_norm', 0.5)
 
     # Get equity parity (disparity measure)
     parity = row.get('equity_parity', 0.5)
