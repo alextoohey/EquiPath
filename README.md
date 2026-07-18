@@ -5,7 +5,7 @@
 🏆 First Place for Most Creative Project in the Educational Equity Track (sponsored by Snowflake), 7th Annual Datathon for Social Good @ UC Berkeley
 
 <!-- Once deployed: replace # with your Streamlit Cloud URL -->
-**[Live demo](#)** · [Quick start](#quick-start) · [How the matching works](#how-the-matching-works) · [Architecture](#architecture)
+**[Live demo](https://equipath.streamlit.app/)** · [Quick start](#quick-start) · [How the matching works](#how-the-matching-works) · [Architecture](#architecture)
 
 ![Personalized recommendations with AI explanations](docs/screenshots/recommendations.png)
 *Top matches for a first-generation Latina student-parent in California with a $12k budget, public schools only: UC Davis ($8,594 net price for this family, 49% admission rate, 87% graduation rate), then CSU San Bernardino, a Hispanic-Serving Institution at $3,298 with a 91% admission rate. Ranked by what she'd actually pay and her odds of getting in and graduating, not prestige.*
@@ -62,8 +62,8 @@ Two design rules kept us honest:
 ## Quick start
 
 ```bash
-git clone https://github.com/AndreJustinLee/7thDatathon.git
-cd 7thDatathon
+git clone https://github.com/alextoohey/EquiPath.git
+cd EquiPath
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 streamlit run Home.py
