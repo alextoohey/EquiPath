@@ -1,0 +1,5 @@
+# No [theme] section on purpose: Streamlit then follows each viewer's
+# system light/dark preference.
+
+[browser]
+gatherUsageStats = false

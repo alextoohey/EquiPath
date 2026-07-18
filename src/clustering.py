@@ -38,7 +38,6 @@ def add_clusters(df, n_clusters=5, random_state=42):
     pd.DataFrame
         DataFrame with added cluster_id and cluster_label columns
     """
-    print(f"\nPerforming K-means clustering with {n_clusters} clusters...")
 
     # Select features for clustering
     feature_cols = [
@@ -74,39 +73,57 @@ def add_clusters(df, n_clusters=5, random_state=42):
         columns=feature_cols
     )
 
-    print("\n" + "="*60)
-    print("CLUSTER CENTROIDS")
-    print("="*60)
-    print(centroids.round(3))
-
     # Assign human-readable labels based on centroid characteristics
     cluster_labels = label_clusters(centroids)
 
     # Map cluster IDs to labels
     df['cluster_label'] = df['cluster_id'].map(cluster_labels)
 
-    # Print cluster distribution
-    print("\n" + "="*60)
-    print("CLUSTER DISTRIBUTION")
-    print("="*60)
-    cluster_counts = df['cluster_label'].value_counts().sort_index()
-    for label, count in cluster_counts.items():
-        pct = count / len(df) * 100
-        print(f"  {label}: {count} institutions ({pct:.1f}%)")
+    counts = df['cluster_label'].value_counts()
+    print("K-means archetypes: " + ", ".join(
+        f"{label} ({count})" for label, count in counts.items()))
 
     return df, centroids, cluster_labels
+
+
+# One-line meanings for each archetype, shown wherever the labels appear.
+# Keyed by label; unknown labels fall back to a generic explanation.
+ARCHETYPE_DESCRIPTIONS = {
+    "Equity Champions":
+        "Strong earnings outcomes, affordable, and equitable graduation rates "
+        "across racial groups, but selective: treat these as reach schools.",
+    "Equity-Focused Access":
+        "Strong earnings outcomes and equitable graduation rates with high "
+        "admission rates: good odds and good outcomes.",
+    "High ROI, Uneven Outcomes":
+        "Graduates earn well on average, but graduation rates differ sharply "
+        "across racial groups; check the rate for students like you.",
+    "Affordable & Accessible":
+        "Low cost and high admission rates, with moderate earnings outcomes.",
+    "High Access, Lower ROI":
+        "Easy to get into, but weaker earnings-versus-debt outcomes and less "
+        "generous pricing; compare against the affordable cluster.",
+}
+
+_GENERIC_DESCRIPTION = ("Named for its two strongest traits relative to the "
+                        "average institution.")
+
+
+def get_archetype_description(label):
+    """One-sentence meaning for an archetype label (numbered variants share it)."""
+    base = label.rstrip("0123456789 ")
+    return ARCHETYPE_DESCRIPTIONS.get(label,
+           ARCHETYPE_DESCRIPTIONS.get(base, _GENERIC_DESCRIPTION))
 
 
 def label_clusters(centroids):
     """
     Assign human-readable labels to clusters based on centroid characteristics.
 
-    Labels are based on dominant characteristics:
-    - High ROI, High Equity, Affordable: "Equity Champions"
-    - High ROI, Less Affordable: "Prestigious & Selective"
-    - Affordable, High Access: "Accessible & Affordable"
-    - High Equity, High Access: "Equity-Focused Access"
-    - Balanced: "Balanced Options"
+    The named rules cover the recurring shapes in this dataset (see
+    ARCHETYPE_DESCRIPTIONS); anything else is named for its two largest
+    deviations from the mean centroid, so no cluster gets a vague
+    "Balanced" label.
 
     Parameters:
     -----------
@@ -119,6 +136,13 @@ def label_clusters(centroids):
         Mapping from cluster_id to cluster_label
     """
     labels = {}
+    feature_names = {
+        'roi_score': 'ROI',
+        'afford_score_std': 'Affordability',
+        'equity_parity': 'Equity',
+        'access_score_base': 'Access',
+    }
+    col_means = centroids[list(feature_names)].mean()
 
     for idx, row in centroids.iterrows():
         roi = row['roi_score']
@@ -126,19 +150,23 @@ def label_clusters(centroids):
         equity = row['equity_parity']
         access = row['access_score_base']
 
-        # Determine label based on characteristics
-        if roi > 0.7 and equity > 0.6 and afford > 0.7:
+        if roi >= 0.7 and equity < 0.35:
+            labels[idx] = "High ROI, Uneven Outcomes"
+        elif roi >= 0.7 and equity >= 0.6 and access < 0.5:
             labels[idx] = "Equity Champions"
-        elif roi > 0.7 and afford < 0.6:
-            labels[idx] = "Prestigious & Selective"
-        elif afford > 0.8 and access > 0.8:
-            labels[idx] = "Accessible & Affordable"
-        elif equity > 0.6 and access > 0.7:
+        elif roi >= 0.7 and equity >= 0.6:
             labels[idx] = "Equity-Focused Access"
-        elif afford > 0.7 and roi > 0.5:
-            labels[idx] = "Good Value Options"
+        elif afford >= 0.75 and access >= 0.7:
+            labels[idx] = "Affordable & Accessible"
+        elif roi < 0.4 and access >= 0.7:
+            labels[idx] = "High Access, Lower ROI"
         else:
-            labels[idx] = "Balanced Options"
+            # Fallback: name the two largest deviations from the mean centroid
+            devs = {col: row[col] - col_means[col] for col in feature_names}
+            top_two = sorted(devs, key=lambda c: abs(devs[c]), reverse=True)[:2]
+            parts = [f"{'High' if devs[c] > 0 else 'Lower'} {feature_names[c]}"
+                     for c in top_two]
+            labels[idx] = ", ".join(parts)
 
     # Ensure unique labels
     label_counts = {}
@@ -236,10 +264,10 @@ def recommend_cluster_for_profile(profile, cluster_labels_dict):
 
 if __name__ == "__main__":
     # Test clustering
-    from src.feature_engineering import build_featured_college_df
+    from src.features import build_college_features
 
     print("Building featured dataset...")
-    df = build_featured_college_df()
+    df = build_college_features()
 
     print("\n" + "="*60)
     print("TESTING K-MEANS CLUSTERING")

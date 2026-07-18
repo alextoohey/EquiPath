@@ -2,7 +2,7 @@
 EquiPath - My Recommendations Page
 
 Comprehensive recommendations hub that works with shared profile
-(created via My Profile editor OR AI Chat Assistant).
+(created via My Profile editor OR Chat Assistant).
 
 Features:
 - Personalized college recommendations with detailed metrics
@@ -21,14 +21,16 @@ import os
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.shared_profile_state import (
+from src.profile_state import (
     initialize_shared_profile,
     get_shared_profile,
     has_minimum_profile
 )
-from src.enhanced_scoring import rank_colleges_for_user, get_personalized_weights
-from src.enhanced_feature_engineering import build_enhanced_featured_college_df
-from src.llm_integration import build_recommendation_summary, generate_explanations
+from src.scoring import rank_colleges_for_user, get_personalized_weights
+from src.features import build_college_features
+from src.clustering import add_clusters, ARCHETYPE_DESCRIPTIONS, get_archetype_description
+from src.llm import build_recommendation_summary, generate_explanations
+from src.config import get_anthropic_api_key, get_anthropic_model
 
 
 def format_urbanization(value):
@@ -120,7 +122,7 @@ def main():
     st.markdown("""
     **Get personalized college recommendations based on your profile.**
 
-    Your profile persists across all pages - build it through the AI Chat Assistant or edit it in My Profile.
+    Your profile persists across all pages - build it through the Chat Assistant or edit it in My Profile.
     """)
 
     st.divider()
@@ -143,7 +145,7 @@ def main():
 
         **Choose one:**
         - 📝 **My Profile** - Fill out your profile manually
-        - 🤖 **AI Chat Assistant** - Build your profile through conversation
+        - 💬 **Chat Assistant** - Build your profile through conversation
         """)
 
         col1, col2 = st.columns(2)
@@ -151,8 +153,8 @@ def main():
             if st.button("📝 Go to My Profile", use_container_width=True, type="primary"):
                 st.switch_page("pages/1_✏️_My_Profile.py")
         with col2:
-            if st.button("🤖 Go to AI Chat", use_container_width=True):
-                st.switch_page("pages/3_🤖_AI_Chat_Assistant.py")
+            if st.button("💬 Go to Chat Assistant", use_container_width=True):
+                st.switch_page("pages/3_💬_Chat_Assistant.py")
         return
 
     # Main recommendation controls
@@ -171,10 +173,12 @@ def main():
     # Get recommendations button
     if st.button("🔍 Find My Matches", type="primary", use_container_width=True):
         try:
-            # Clear all AI summary caches when generating new recommendations
+            # New recommendations invalidate cached AI summaries and any Q&A
+            # conversation about the previous list
             keys_to_delete = [key for key in st.session_state.keys() if key.startswith('ai_summaries_')]
             for key in keys_to_delete:
                 del st.session_state[key]
+            st.session_state.qa_chat_history = []
 
             # Build profile from current state
             profile = get_shared_profile()
@@ -185,9 +189,10 @@ def main():
 
             # Get recommendations
             with st.spinner("Finding your best matches..."):
-                colleges_df = build_enhanced_featured_college_df(
+                colleges_df = build_college_features(
                     earnings_ceiling=profile.earnings_ceiling_match
                 )
+                colleges_df, _, _ = add_clusters(colleges_df, n_clusters=5)
                 recommendations = rank_colleges_for_user(colleges_df, profile, top_k=top_k)
 
                 # Store in session state so it persists across reruns
@@ -218,19 +223,55 @@ def main():
             st.markdown("### 📊 Your Personalized Scoring Weights")
             col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
             with col1:
-                st.metric("Affordability", f"{weights['affordability']:.1%}")
+                st.metric("Affordability", f"{weights['affordability']:.1%}",
+                          help="How much cost counts in your ranking. Lower this if budget isn't a constraint for you.")
             with col2:
-                st.metric("ROI", f"{weights['roi']:.1%}")
+                st.metric("ROI", f"{weights['roi']:.1%}",
+                          help="How much earnings-vs-debt outcomes count in your ranking.")
             with col3:
-                st.metric("Equity", f"{weights['equity']:.1%}")
+                st.metric("Equity", f"{weights['equity']:.1%}",
+                          help="How much graduation outcomes (for your demographic group, if provided) count in your ranking.")
             with col4:
-                st.metric("Support", f"{weights['support']:.1%}")
+                st.metric("Support", f"{weights['support']:.1%}",
+                          help="How much student-support infrastructure counts in your ranking.")
             with col5:
-                st.metric("Academic", f"{weights['academic_fit']:.1%}")
+                st.metric("Academic", f"{weights['academic_fit']:.1%}",
+                          help="How much program strength in your intended major counts in your ranking.")
             with col6:
-                st.metric("Environment", f"{weights['environment']:.1%}")
+                st.metric("Environment", f"{weights['environment']:.1%}",
+                          help="How much campus size/setting fit counts in your ranking.")
             with col7:
-                st.metric("Access", f"{weights['access']:.1%}")
+                st.metric("Access", f"{weights['access']:.1%}",
+                          help="How much your admission odds count in your ranking.")
+
+            with st.expander("ℹ️ How to read these scores"):
+                st.markdown("""
+                Each college gets seven **fit scores from 0 to 1** (higher = better fit for *you*),
+                and your match score is the weighted average using the percentages above.
+
+                - **Affordability**: how cheap the school is for a family like yours (net price and
+                  affordability gap; childcare-adjusted if you're a student-parent). This is an
+                  *absolute* cost score: raising your budget widens which schools pass the filter,
+                  but doesn't make expensive schools score better. If cost matters less to you,
+                  lower the **Affordability weight** in My Profile instead.
+                - **ROI**: graduates' median earnings 10 years out vs. median debt.
+                - **Equity**: the school's graduation rate for students like you (your group's rate
+                  if you shared race/ethnicity, the overall rate otherwise), plus how equal outcomes
+                  are across groups.
+                - **Support**: student-faculty ratio, instructional spending, and experience
+                  supporting low-income and nontraditional students.
+                - **Academic**: strength in your intended major and research intensity.
+                - **Environment**: how well size/setting match your preferences.
+                - **Access**: your *odds of getting in*, based on the admission rate and your GPA.
+                  Highly selective schools score near 0 here for everyone; a 4% admit rate is a
+                  long shot even with a 4.0. That's honesty, not an error; it's also why Access
+                  carries only ~5% weight by default.
+
+                **The archetypes** on each card come from K-means clustering of all
+                4,900+ institutions by ROI, affordability, equity, and access:
+                """)
+                for name, desc in ARCHETYPE_DESCRIPTIONS.items():
+                    st.markdown(f"- **{name}**: {desc}")
 
         st.divider()
 
@@ -240,8 +281,10 @@ def main():
         # Generate AI summaries if enabled
         ai_summaries = {}
         if use_ai_summaries and profile:
-            # Simple cache key based on the first college name (changes when recommendations change)
-            cache_key = f"ai_summaries_{recommendations.iloc[0]['Institution Name'] if len(recommendations) > 0 else 'none'}"
+            # Cache key covers the whole ranked list, so any change in the
+            # recommendations (not just the #1 school) regenerates summaries
+            names = tuple(recommendations['Institution Name']) if len(recommendations) > 0 else ()
+            cache_key = f"ai_summaries_{hash(names)}"
 
             if cache_key in st.session_state:
                 ai_summaries = st.session_state[cache_key]
@@ -253,7 +296,7 @@ def main():
                         summary = build_recommendation_summary(profile, recommendations, top_k=len(recommendations))
 
                         # Generate explanations
-                        api_key = os.getenv('ANTHROPIC_API_KEY')
+                        api_key = get_anthropic_api_key()
                         if api_key:
                             explanations = generate_explanations(summary, api_key=api_key)
                             if explanations and isinstance(explanations, dict) and 'recommendations' in explanations:
@@ -278,6 +321,11 @@ def main():
             composite = row.get('composite_score', 0)
 
             with st.expander(f"**{idx}. {inst_name}** - Match Score: {composite:.3f}", expanded=(idx <= 3)):
+                archetype = safe_get(row, 'cluster_label', None)
+                if archetype and archetype != "N/A":
+                    st.caption(f"🏷️ Archetype: **{archetype}** · "
+                               f"{get_archetype_description(archetype)}")
+
                 # AI Summary if available
                 if inst_name in ai_summaries and ai_summaries[inst_name]:
                     st.info(f"**🤖 AI Summary:** {ai_summaries[inst_name]}")
@@ -299,22 +347,29 @@ def main():
                     st.metric("Median Debt", format_currency(debt))
 
                 # Fit scores
-                st.markdown("**Your Personalized Fit Scores:**")
+                st.markdown("**Your Personalized Fit Scores** (0-1, higher = better fit for you):")
                 col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
                 with col1:
-                    st.metric("Affordability", f"{safe_get(row, 'personalized_affordability', 0):.2f}")
+                    st.metric("Affordability", f"{safe_get(row, 'personalized_affordability', 0):.2f}",
+                              help="How affordable this school is for a family like yours (absolute cost, not relative to your budget).")
                 with col2:
-                    st.metric("ROI", f"{safe_get(row, 'roi_score', 0):.2f}")
+                    st.metric("ROI", f"{safe_get(row, 'roi_score', 0):.2f}",
+                              help="Graduates' median earnings 10 years out vs. median debt.")
                 with col3:
-                    st.metric("Equity", f"{safe_get(row, 'personalized_equity', 0):.2f}")
+                    st.metric("Equity", f"{safe_get(row, 'personalized_equity', 0):.2f}",
+                              help="Graduation rate for students like you, plus outcome parity across groups.")
                 with col4:
-                    st.metric("Support", f"{safe_get(row, 'personalized_support', 0):.2f}")
+                    st.metric("Support", f"{safe_get(row, 'personalized_support', 0):.2f}",
+                              help="Student-support infrastructure: faculty ratio, instructional spend, low-income and nontraditional-student experience.")
                 with col5:
-                    st.metric("Academic", f"{safe_get(row, 'personalized_academic_fit', 0):.2f}")
+                    st.metric("Academic", f"{safe_get(row, 'personalized_academic_fit', 0):.2f}",
+                              help="Program strength in your intended major and research intensity.")
                 with col6:
-                    st.metric("Environment", f"{safe_get(row, 'personalized_environment', 0):.2f}")
+                    st.metric("Environment", f"{safe_get(row, 'personalized_environment', 0):.2f}",
+                              help="How well the campus size and setting match your preferences.")
                 with col7:
-                    st.metric("Access", f"{safe_get(row, 'personalized_access', 0):.2f}")
+                    st.metric("Access", f"{safe_get(row, 'personalized_access', 0):.2f}",
+                              help="Your odds of admission. Highly selective schools score near 0 for everyone; a 4% admit rate is a long shot even with a 4.0 GPA.")
 
                 # Details
                 st.markdown("### 📊 Additional Details")
@@ -401,8 +456,8 @@ def main():
                        use_container_width=True,
                        type="primary",
                        key="view_recommendations_on_map"):
-                # Store recommendations in session state for map page
-                st.session_state.recommended_colleges = recommendations
+                # Map reads current_recommendations; just default it to the
+                # recommended view
                 st.session_state.show_only_recommended = True
                 st.switch_page("pages/4_🗺️_School_Map.py")
 
@@ -410,84 +465,85 @@ def main():
         st.divider()
         st.subheader("💬 Ask Questions About Your Recommendations")
 
-        with st.expander("**Open Q&A Chat**", expanded=False):
-            st.markdown("""
-            Ask me anything about your recommended colleges! For example:
-            - "Which of these schools has the best ROI?"
-            - "Tell me more about the schools in California"
-            - "Which schools are best for STEM majors?"
-            """)
+        st.markdown("""
+        Ask me anything about your recommended colleges! For example:
+        - "Which of these schools has the best ROI?"
+        - "Tell me more about the schools in California"
+        - "Which schools are best for STEM majors?"
+        """)
 
-            # Check for API key
-            api_key = os.getenv('ANTHROPIC_API_KEY')
-            if not api_key:
-                st.warning("⚠️ Anthropic API key not found. Set ANTHROPIC_API_KEY in your .env file to use the Q&A feature.")
-            else:
-                # Initialize chat history
-                if 'qa_chat_history' not in st.session_state:
-                    st.session_state.qa_chat_history = []
+        # Check for API key
+        api_key = get_anthropic_api_key()
+        if not api_key:
+            st.warning("⚠️ Anthropic API key not found. Set ANTHROPIC_API_KEY in your .env file to use the Q&A feature.")
+        else:
+            # Initialize chat history
+            if 'qa_chat_history' not in st.session_state:
+                st.session_state.qa_chat_history = []
 
-                # Display chat history
+            # All messages render inside this container, which sits above
+            # the chat input — including the live-streamed reply below
+            chat_area = st.container()
+            with chat_area:
                 for msg in st.session_state.qa_chat_history:
                     with st.chat_message(msg["role"]):
                         st.write(msg["content"])
 
-                # Chat input
-                if question := st.chat_input("Ask a question about your recommendations..."):
-                    # Add user message to history
-                    st.session_state.qa_chat_history.append({"role": "user", "content": question})
+            if question := st.chat_input("Ask a question about your recommendations..."):
+                st.session_state.qa_chat_history.append({"role": "user", "content": question})
 
+                with chat_area:
                     with st.chat_message("user"):
                         st.write(question)
 
-                    # Generate response
                     with st.chat_message("assistant"):
-                        with st.spinner("Thinking..."):
-                            try:
-                                # Import anthropic
-                                import anthropic
+                        try:
+                            import anthropic
 
-                                client = anthropic.Anthropic(api_key=api_key)
+                            client = anthropic.Anthropic(api_key=api_key)
 
-                                # Build context from recommendations
-                                context = f"You are helping a student understand their {len(recommendations)} college recommendations. "
-                                context += "Here are the top 5 recommendations:\n\n"
+                            # System prompt carries the student profile and
+                            # per-school metrics; the chat history goes in
+                            # messages so follow-ups keep their context
+                            import json
+                            summary = build_recommendation_summary(
+                                profile, recommendations,
+                                top_k=min(10, len(recommendations)))
+                            context = (
+                                "You are EquiPath's advisor, helping a student understand "
+                                f"their {len(recommendations)} personalized college recommendations. "
+                                "Below is their profile and the detailed metrics behind their "
+                                "top matches (all scores are 0-1, higher = better fit). Use this "
+                                "data to answer specifically; be warm, honest, and concise. "
+                                "Write dollar amounts without the dollar sign (e.g., 2,895 "
+                                "per year) — the chat display renders '$' as math notation.\n\n"
+                                + json.dumps(summary, indent=2)
+                            )
 
-                                for idx, (_, row) in enumerate(recommendations.head(5).iterrows(), 1):
-                                    inst_name = row.get('Institution Name', row.get('INSTNM', 'Unknown'))
-                                    composite = row.get('composite_score', 0)
-                                    city = safe_get(row, 'City', 'Unknown')
-                                    state = safe_get(row, 'State of Institution', 'Unknown')
-                                    context += f"{idx}. {inst_name} ({city}, {state}) - Match Score: {composite:.3f}\n"
-
-                                # Create message
-                                messages = [
-                                    {"role": "user", "content": f"{context}\n\nQuestion: {question}"}
+                            # Stream tokens into the page as they arrive
+                            with client.messages.stream(
+                                model=get_anthropic_model(),
+                                max_tokens=1000,
+                                system=context,
+                                messages=[
+                                    {"role": m["role"], "content": m["content"]}
+                                    for m in st.session_state.qa_chat_history
                                 ]
+                            ) as stream:
+                                answer = st.write_stream(stream.text_stream)
 
-                                response = client.messages.create(
-                                    model=os.getenv('ANTHROPIC_MODEL', 'claude-3-haiku-20240307'),
-                                    max_tokens=1000,
-                                    messages=messages
-                                )
+                        except Exception as e:
+                            answer = f"Error generating response: {str(e)}"
+                            st.error(answer)
 
-                                answer = response.content[0].text
-                                st.write(answer)
-
-                                # Add to history
-                                st.session_state.qa_chat_history.append({"role": "assistant", "content": answer})
-
-                            except Exception as e:
-                                error_msg = f"Error generating response: {str(e)}"
-                                st.error(error_msg)
-                                st.session_state.qa_chat_history.append({"role": "assistant", "content": error_msg})
+                st.session_state.qa_chat_history.append({"role": "assistant", "content": answer})
 
     # Info box at bottom
     st.divider()
     st.info("""
     💡 **Tips:**
     - Adjust your profile in **My Profile** to refine recommendations
-    - Use **AI Chat Assistant** to build your profile conversationally
+    - Use **Chat Assistant** to build your profile conversationally
     - Click **View on Map** to see where these schools are located
     - Enable **AI Summaries** in the sidebar for personalized explanations
     """)

@@ -5,7 +5,9 @@ Provides an interactive UI for viewing and editing the user profile.
 """
 
 import streamlit as st
-from src.shared_profile_state import initialize_shared_profile, build_profile_from_shared_state
+
+from src.profile import normalize_state
+from src.profile_state import initialize_shared_profile
 
 
 def render_profile_editor():
@@ -51,26 +53,26 @@ def render_profile_editor():
         if data['test_score_status'] == 'submitted':
             col1, col2 = st.columns(2)
             with col1:
-                sat = st.number_input(
+                data['sat_score'] = st.number_input(
                     "SAT Score (optional, 400-1600)",
                     min_value=400,
                     max_value=1600,
-                    value=int(data['sat_score']) if data['sat_score'] else 1000,
+                    value=int(data['sat_score']) if data['sat_score'] else None,
                     step=10,
+                    placeholder="Leave blank to skip",
                     key="edit_sat"
                 )
-                data['sat_score'] = sat if sat > 400 else None
 
             with col2:
-                act = st.number_input(
+                data['act_score'] = st.number_input(
                     "ACT Score (optional, 1-36)",
                     min_value=1,
                     max_value=36,
-                    value=int(data['act_score']) if data['act_score'] else 20,
+                    value=int(data['act_score']) if data['act_score'] else None,
                     step=1,
+                    placeholder="Leave blank to skip",
                     key="edit_act"
                 )
-                data['act_score'] = act if act > 1 else None
 
     # Financial Situation
     with st.expander("💰 Financial Situation", expanded=True):
@@ -93,15 +95,15 @@ def render_profile_editor():
             )
 
         with col2:
-            family_income = st.number_input(
+            data['family_income'] = st.number_input(
                 "Family Income (optional, $)",
                 min_value=0,
                 max_value=500000,
-                value=int(data['family_income']) if data['family_income'] else 0,
+                value=int(data['family_income']) if data['family_income'] else None,
                 step=5000,
+                placeholder="Leave blank to skip",
                 key="edit_income"
             )
-            data['family_income'] = family_income if family_income > 0 else None
 
             # Auto-calculate earnings ceiling based on income
             if data['family_income']:
@@ -135,15 +137,15 @@ def render_profile_editor():
             )
 
         with col2:
-            age = st.number_input(
+            data['age'] = st.number_input(
                 "Age (optional)",
                 min_value=14,
                 max_value=100,
-                value=int(data['age']) if data['age'] else 18,
+                value=int(data['age']) if data['age'] else None,
                 step=1,
+                placeholder="Leave blank to skip",
                 key="edit_age"
             )
-            data['age'] = age if age > 14 else None
 
             data['is_student_parent'] = st.checkbox(
                 "Student-parent (have dependent children)",
@@ -162,13 +164,14 @@ def render_profile_editor():
         col1, col2 = st.columns(2)
 
         with col1:
-            home_state = st.text_input(
-                "Home State (2-letter code, e.g., CA)",
+            home_state_raw = st.text_input(
+                "Home State (e.g., CA or California)",
                 value=data['home_state'] if data['home_state'] else '',
-                max_chars=2,
                 key="edit_home_state"
-            ).upper()
-            data['home_state'] = home_state if home_state else None
+            )
+            data['home_state'] = normalize_state(home_state_raw)
+            if home_state_raw.strip() and not data['home_state']:
+                st.caption("⚠️ Unrecognized state — use a name like California or a code like CA")
 
             data['in_state_only'] = st.checkbox(
                 "Only consider in-state schools",
@@ -179,11 +182,16 @@ def render_profile_editor():
 
         with col2:
             preferred = st.text_input(
-                "Preferred States (comma-separated, e.g., CA,NY,TX)",
+                "Preferred States (comma-separated, e.g., CA, New York, TX)",
                 value=','.join(data['preferred_states']) if data['preferred_states'] else '',
                 key="edit_preferred_states"
             )
-            data['preferred_states'] = [s.strip().upper() for s in preferred.split(',') if s.strip()] if preferred else []
+            entries = [e.strip() for e in preferred.split(',') if e.strip()] if preferred else []
+            normalized = [normalize_state(e) for e in entries]
+            data['preferred_states'] = [code for code in normalized if code]
+            unrecognized = [e for e, code in zip(entries, normalized) if not code]
+            if unrecognized:
+                st.caption(f"⚠️ Unrecognized and ignored: {', '.join(unrecognized)}")
 
         # Add zip code for distance-based filtering (moved outside col2 to give it own row)
         st.markdown("**Distance-Based Filtering**")
@@ -227,17 +235,17 @@ def render_profile_editor():
         col1, col2 = st.columns(2)
 
         with col1:
-            data['urbanization_pref'] = st.selectbox(
-                "Setting Preference",
-                options=['urban', 'suburban', 'town', 'rural', 'no_preference'],
-                index=['urban', 'suburban', 'town', 'rural', 'no_preference'].index(data['urbanization_pref']) if data['urbanization_pref'] in ['urban', 'suburban', 'town', 'rural', 'no_preference'] else 4,
+            data['urbanization_pref'] = st.multiselect(
+                "Setting Preference (select any — leave empty for no preference)",
+                options=['urban', 'suburban', 'town', 'rural'],
+                default=[v for v in (data['urbanization_pref'] or []) if v in ['urban', 'suburban', 'town', 'rural']],
                 key="edit_urban"
             )
 
-            data['size_pref'] = st.selectbox(
-                "School Size Preference",
-                options=['small', 'medium', 'large', 'no_preference'],
-                index=['small', 'medium', 'large', 'no_preference'].index(data['size_pref']) if data['size_pref'] in ['small', 'medium', 'large', 'no_preference'] else 3,
+            data['size_pref'] = st.multiselect(
+                "School Size Preference (select any — leave empty for no preference)",
+                options=['small', 'medium', 'large'],
+                default=[v for v in (data['size_pref'] or []) if v in ['small', 'medium', 'large']],
                 key="edit_size"
             )
 
@@ -249,10 +257,10 @@ def render_profile_editor():
                 key="edit_type"
             )
 
-            data['msi_preference'] = st.selectbox(
-                "Minority-Serving Institution Preference",
-                options=['HBCU', 'HSI', 'Tribal', 'any_MSI', 'no_preference'],
-                index=['HBCU', 'HSI', 'Tribal', 'any_MSI', 'no_preference'].index(data['msi_preference']) if data['msi_preference'] in ['HBCU', 'HSI', 'Tribal', 'any_MSI', 'no_preference'] else 4,
+            data['msi_preference'] = st.multiselect(
+                "Minority-Serving Institution Preference (select any — leave empty for no preference)",
+                options=['HBCU', 'HSI', 'Tribal', 'any_MSI'],
+                default=[v for v in (data['msi_preference'] or []) if v in ['HBCU', 'HSI', 'Tribal', 'any_MSI']],
                 key="edit_msi"
             )
 

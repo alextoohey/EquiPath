@@ -16,10 +16,8 @@ import pandas as pd
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.feature_engineering import build_featured_college_df
-from src.clustering import add_clusters
-from src.user_profile import UserProfile
-from src.scoring import rank_colleges_for_user
+from src.features import build_college_features
+from src.clustering import add_clusters, ARCHETYPE_DESCRIPTIONS
 
 
 def main():
@@ -36,14 +34,14 @@ def main():
     # Title and description
     st.title("🗺️ U.S. Postsecondary Schools Interactive Map")
 
-    # Check if user has a saved profile from other pages
-    has_profile = 'saved_profile' in st.session_state and st.session_state.saved_profile is not None
+    # Recommendations generated on the My Recommendations page are shared via
+    # session state, so the toggle appears however the user navigates here
     has_recommendations = (
-        ('saved_recommendations' in st.session_state and st.session_state.saved_recommendations is not None) or
-        ('recommended_colleges' in st.session_state and st.session_state.recommended_colleges is not None)
+        st.session_state.get('current_recommendations') is not None
+        and len(st.session_state.current_recommendations) > 0
     )
 
-    if has_profile or has_recommendations:
+    if has_recommendations:
         st.markdown("""
         Explore postsecondary schools across the United States on an interactive map.
         - **Toggle between all schools or your recommended schools**
@@ -58,7 +56,7 @@ def main():
         - **Click on clusters** to zoom in and see individual schools
         - **Click on markers** to view detailed information about each school
 
-        💡 **Tip:** Create a profile in the College Finder or AI Chat pages to see your recommended schools on the map!
+        💡 **Tip:** Build a profile on the My Profile or Chat Assistant page, generate recommendations, and they will appear here!
         """)
 
     st.divider()
@@ -77,7 +75,7 @@ def main():
     show_mode = "all"
     recommended_schools = set()
 
-    if has_profile or has_recommendations:
+    if has_recommendations:
         # Check if we should default to showing only recommended colleges
         default_index = 1 if st.session_state.get('show_only_recommended', False) else 0
 
@@ -91,27 +89,7 @@ def main():
 
         # Get recommendations if in recommended mode
         if show_mode == "recommended":
-            recommendations_df = None
-
-            # Check for recommendations from My Profile page first
-            if 'recommended_colleges' in st.session_state and st.session_state.recommended_colleges is not None:
-                recommendations_df = st.session_state.recommended_colleges
-            elif 'saved_recommendations' in st.session_state and st.session_state.saved_recommendations is not None:
-                # Use saved recommendations from other pages
-                recommendations_df = st.session_state.saved_recommendations
-            elif has_profile and 'saved_profile' in st.session_state:
-                # Generate recommendations from profile
-                with st.spinner("Loading your recommended schools..."):
-                    # Load data
-                    df = build_featured_college_df()
-                    df_clustered, centroids, labels = add_clusters(df, n_clusters=5)
-
-                    # Get recommendations
-                    profile = st.session_state.saved_profile
-                    recommendations_df = rank_colleges_for_user(df_clustered, profile, top_k=50)
-
-                    # Save for future use
-                    st.session_state.saved_recommendations = recommendations_df
+            recommendations_df = st.session_state.current_recommendations
 
             # Get set of recommended school names if we have recommendations
             if recommendations_df is not None and len(recommendations_df) > 0:
@@ -206,172 +184,161 @@ def main():
                 tiles='OpenStreetMap'
             )
 
-    # Use FastMarkerCluster for better performance with lots of markers
-    # Create a lookup dict for detailed college data
-    # Load the full college database for all schools
-    college_details_lookup = {}
-
-    # If we have recommendations, use that data
-    if has_recommendations:
-        # Get recommendations from whichever source has them
-        recommendations_df = None
-        if 'recommended_colleges' in st.session_state and st.session_state.recommended_colleges is not None:
-            recommendations_df = st.session_state.recommended_colleges
-        elif 'saved_recommendations' in st.session_state and st.session_state.saved_recommendations is not None:
-            recommendations_df = st.session_state.saved_recommendations
-
-        if recommendations_df is not None:
-            for _, row in recommendations_df.iterrows():
-                college_details_lookup[row['Institution Name']] = row
-
-    # For all schools view, load the full database
-    if show_mode == "all" or not college_details_lookup:
+    # Build a compact popup-details lookup once per session.
+    # Selecting a handful of columns and converting to plain dicts is far
+    # cheaper than iterating full DataFrame rows on every rerun.
+    if 'college_popup_details' not in st.session_state:
         try:
-            with st.spinner("Loading college details..."):
-                from src.feature_engineering import build_featured_college_df
-                from src.clustering import add_clusters
-
-                # Cache this in session state to avoid reloading
+            with st.spinner("Loading college details (first visit only)..."):
                 if 'full_college_data' not in st.session_state:
-                    df = build_featured_college_df()
+                    df = build_college_features()
                     df_clustered, _, _ = add_clusters(df, n_clusters=5)
                     st.session_state.full_college_data = df_clustered
 
                 full_df = st.session_state.full_college_data
-
-                # Add all colleges to lookup
-                for _, row in full_df.iterrows():
-                    if row['Institution Name'] not in college_details_lookup:
-                        college_details_lookup[row['Institution Name']] = row
+                cols = {
+                    'name': 'Institution Name',
+                    'sector': 'Sector Name',
+                    'admit': 'Total Percent of Applicants Admitted',
+                    'price': 'Net Price',
+                    'earnings': 'Median Earnings of Students Working and Not Enrolled 10 Years After Entry',
+                    'archetype': 'cluster_label',
+                }
+                available = {k: c for k, c in cols.items() if c in full_df.columns}
+                slim = full_df[list(available.values())].copy()
+                slim.columns = list(available.keys())
+                for num_col in ('admit', 'price', 'earnings'):
+                    if num_col in slim.columns:
+                        slim[num_col] = pd.to_numeric(slim[num_col], errors='coerce')
+                st.session_state.college_popup_details = {
+                    rec['name']: rec for rec in slim.to_dict('records')
+                }
         except Exception as e:
             st.warning(f"Could not load detailed college data: {e}")
+            st.session_state.college_popup_details = {}
 
-    # Prepare data for FastMarkerCluster
-    marker_data = []
-    for feature in filtered_features:
-        props = feature.get('properties', {})
-        coords = feature.get('geometry', {}).get('coordinates', [])
+    details_lookup = st.session_state.college_popup_details
 
-        if coords:
+    def popup_fields(school_name):
+        """Formatted (type, admit, price, earnings, archetype) strings for a school, '' when unknown."""
+        d = details_lookup.get(school_name)
+        if not d:
+            return '', '', '', '', ''
+        sector = str(d.get('sector') or '')
+        if 'Public' in sector:
+            type_str = 'Public'
+        elif 'Private' in sector:
+            type_str = 'Private'
+        else:
+            type_str = ''
+        admit = d.get('admit')
+        price = d.get('price')
+        earnings = d.get('earnings')
+        admit_str = f"{admit:.1f}%" if pd.notna(admit) else ''
+        price_str = f"${price:,.0f}" if pd.notna(price) else ''
+        earn_str = f"${earnings:,.0f}" if pd.notna(earnings) else ''
+        archetype = d.get('archetype')
+        arch_str = str(archetype) if archetype and pd.notna(archetype) else ''
+        return type_str, admit_str, price_str, earn_str, arch_str
+
+    if show_mode == "recommended":
+        # Few markers: rich pins with full popups are fine
+        import html as html_lib
+
+        marker_cluster = MarkerCluster(name='Schools', overlay=True, control=False).add_to(m)
+
+        for feature in filtered_features:
+            props = feature.get('properties', {})
+            coords = feature.get('geometry', {}).get('coordinates', [])
+            if not coords:
+                continue
             lon, lat = coords[0], coords[1]
             school_name = props.get('NAME', 'Unnamed School')
-
-            # Create popup content
-            is_recommended = school_name in recommended_schools if recommended_schools else False
-
-            # Get detailed data if available
-            college_data = college_details_lookup.get(school_name, None)
+            type_str, admit_str, price_str, earn_str, arch_str = popup_fields(school_name)
 
             popup_html = f"""
             <div style="font-family: Arial, sans-serif; width: 280px;">
-                <h4 style="margin: 0 0 10px 0; color: {'#FFD700' if is_recommended else '#1f77b4'};">
-                    {'⭐ ' if is_recommended else ''}{school_name}
-                </h4>
+                <h4 style="margin: 0 0 10px 0; color: #FFD700;">⭐ {html_lib.escape(school_name)}</h4>
+                <p style="margin: 5px 0;"><b>Location:</b> {html_lib.escape(str(props.get('CITY', 'N/A')))}, {html_lib.escape(str(props.get('STATE', 'N/A')))}</p>
             """
+            if type_str:
+                popup_html += f'<p style="margin: 5px 0;"><b>Type:</b> {type_str}</p>'
+            if admit_str:
+                popup_html += f'<p style="margin: 5px 0;"><b>Admission Rate:</b> {admit_str}</p>'
+            if price_str:
+                popup_html += f'<p style="margin: 5px 0;"><b>Net Price:</b> {price_str}/year</p>'
+            if earn_str:
+                popup_html += f'<p style="margin: 5px 0;"><b>Median Earnings (10yr):</b> {earn_str}</p>'
+            if arch_str:
+                popup_html += f'<p style="margin: 5px 0;"><b>Archetype:</b> {arch_str}</p>'
+            popup_html += '<p style="margin: 8px 0 0 0; padding: 5px; background: #FFF9E6; border-left: 3px solid #FFD700;"><b>✨ Recommended for you!</b></p></div>'
 
-            # If we have detailed college data, show that instead of basic info
-            if college_data is not None:
-                # Show detailed information from recommendations
-                # Use Sector Name or Institution Type for text description
-                sector_name = college_data.get('Sector Name', None)
-                if pd.notna(sector_name):
-                    sector_str = str(sector_name)
-                else:
-                    sector_str = str(college_data.get('Institution Type', 'N/A'))
-
-                if 'Public' in sector_str:
-                    institution_type = 'Public'
-                    icon = '🏛️'
-                elif 'Private' in sector_str:
-                    institution_type = 'Private'
-                    icon = '🏢'
-                else:
-                    institution_type = 'N/A'
-                    icon = '🎓'
-
-                popup_html += f'<p style="margin: 5px 0;"><b>{icon} {institution_type}</b></p>'
-
-                # Admission Rate
-                admit_rate = pd.to_numeric(college_data.get('Total Percent of Applicants Admitted', None), errors='coerce')
-                if pd.notna(admit_rate):
-                    popup_html += f'<p style="margin: 5px 0;"><b>Admission Rate:</b> {admit_rate:.1f}%</p>'
-
-                # Net Price
-                net_price = pd.to_numeric(college_data.get('Net Price', None), errors='coerce')
-                if pd.notna(net_price):
-                    popup_html += f'<p style="margin: 5px 0;"><b>Net Price:</b> ${net_price:,.0f}/year</p>'
-
-                # Median Earnings
-                earnings = pd.to_numeric(college_data.get('Median Earnings of Students Working and Not Enrolled 10 Years After Entry', None), errors='coerce')
-                if pd.notna(earnings):
-                    popup_html += f'<p style="margin: 5px 0;"><b>Median Earnings (10yr):</b> ${earnings:,.0f}</p>'
-
-                # Match Score
-                if 'user_score' in college_data:
-                    popup_html += f'<p style="margin: 5px 0;"><b>Match Score:</b> {college_data["user_score"]:.3f}</p>'
-
-            else:
-                # Show basic GeoJSON information
-                popup_html += f"""
-                <p style="margin: 5px 0;">
-                    <b>Location:</b><br>
-                    {props.get('CITY', 'N/A')}, {props.get('STATE', 'N/A')}
-                </p>
-                <p style="margin: 5px 0;">
-                    <b>Type:</b> {props.get('TYPE_DESC', 'N/A') if props.get('TYPE_DESC') else 'N/A'}
-                </p>
-                """
-
-            # Website link
-            if college_data is not None:
-                # Try to get website from college data first
-                website = None
-            else:
-                website = props.get('WEBSITE')
-
-            if website:
-                popup_html += f'<p style="margin: 5px 0;"><a href="http://{website}" target="_blank">🔗 Visit Website</a></p>'
-
-            if is_recommended:
-                popup_html += '<p style="margin: 8px 0 0 0; padding: 5px; background: #FFF9E6; border-left: 3px solid #FFD700;"><b>✨ Recommended for you!</b></p>'
-
-            popup_html += "</div>"
-
-            marker_data.append([lat, lon, popup_html, school_name])
-
-    # Add markers using MarkerCluster for popups support
-    marker_cluster = MarkerCluster(
-        name='Schools',
-        overlay=True,
-        control=False,
-        icon_create_function=None
-    ).add_to(m)
-
-    # Add markers to cluster
-    for lat, lon, popup, tooltip in marker_data:
-        is_recommended = show_mode == "recommended"
-
-        if is_recommended:
-            # Use custom icon with graduation cap for recommended schools
             folium.Marker(
                 location=[lat, lon],
-                popup=folium.Popup(popup, max_width=300),
-                tooltip=tooltip,
+                popup=folium.Popup(popup_html, max_width=300),
+                tooltip=school_name,
                 icon=folium.Icon(color='orange', icon='graduation-cap', prefix='fa')
             ).add_to(marker_cluster)
-        else:
-            # Use simple circle markers for regular schools
-            folium.CircleMarker(
-                location=[lat, lon],
-                radius=5,
-                popup=folium.Popup(popup, max_width=300),
-                tooltip=tooltip,
-                color='#3388ff',
-                fill=True,
-                fillColor='#3388ff',
-                fillOpacity=0.7,
-                weight=2
-            ).add_to(marker_cluster)
+
+    else:
+        # All-schools view: FastMarkerCluster builds markers client-side from a
+        # compact data array — dramatically faster than serializing 6,800
+        # individual Marker objects with server-rendered popup HTML.
+        rows_key = f"map_rows_{selected_state}"
+        if rows_key not in st.session_state:
+            rows = []
+            for feature in filtered_features:
+                props = feature.get('properties', {})
+                coords = feature.get('geometry', {}).get('coordinates', [])
+                if not coords:
+                    continue
+                lon, lat = coords[0], coords[1]
+                school_name = props.get('NAME', 'Unnamed School')
+                type_str, admit_str, price_str, earn_str, arch_str = popup_fields(school_name)
+                rows.append([
+                    lat, lon, school_name,
+                    str(props.get('CITY', 'N/A')), str(props.get('STATE', 'N/A')),
+                    type_str, admit_str, price_str, earn_str, arch_str,
+                ])
+            st.session_state[rows_key] = rows
+
+        marker_callback = """
+        function (row) {
+            var marker = L.circleMarker(new L.LatLng(row[0], row[1]), {
+                radius: 5, color: '#3388ff', fill: true,
+                fillColor: '#3388ff', fillOpacity: 0.7, weight: 2
+            });
+            function esc(t) {
+                return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            }
+            var html = '<div style="font-family: Arial, sans-serif; width: 240px;">'
+                + '<h4 style="margin:0 0 8px 0; color:#1f77b4;">' + esc(row[2]) + '</h4>'
+                + '<p style="margin:4px 0;"><b>Location:</b> ' + esc(row[3]) + ', ' + esc(row[4]) + '</p>'
+                + (row[5] ? '<p style="margin:4px 0;"><b>Type:</b> ' + esc(row[5]) + '</p>' : '')
+                + (row[6] ? '<p style="margin:4px 0;"><b>Admission Rate:</b> ' + esc(row[6]) + '</p>' : '')
+                + (row[7] ? '<p style="margin:4px 0;"><b>Net Price:</b> ' + esc(row[7]) + '/year</p>' : '')
+                + (row[8] ? '<p style="margin:4px 0;"><b>Median Earnings (10yr):</b> ' + esc(row[8]) + '</p>' : '')
+                + (row[9] ? '<p style="margin:4px 0;"><b>Archetype:</b> ' + esc(row[9]) + '</p>' : '')
+                + '</div>';
+            marker.bindPopup(html, {maxWidth: 300});
+            marker.bindTooltip(esc(row[2]));
+            return marker;
+        }
+        """
+        FastMarkerCluster(
+            data=st.session_state[rows_key],
+            callback=marker_callback,
+            name='Schools',
+            control=False,
+        ).add_to(m)
+
+    with st.expander("🏷️ What do the school archetypes mean?"):
+        st.markdown(
+            "Every institution is assigned one of five archetypes via K-means "
+            "clustering on four indices (ROI, affordability, equity, access). "
+            "They appear in the map popups:")
+        for name, desc in ARCHETYPE_DESCRIPTIONS.items():
+            st.markdown(f"- **{name}**: {desc}")
 
     # Display the map
     st_folium(m, width=None, height=600, use_container_width=True, returned_objects=[])
@@ -422,19 +389,6 @@ def main():
             col_idx = idx % 4
             with cols[col_idx]:
                 st.write(f"**{state}:** {count:,}")
-
-    # Show profile summary if available
-    if has_profile:
-        with st.expander("👤 Your Profile Settings"):
-            prof = st.session_state.saved_profile
-            st.write(f"**Budget:** ${prof.budget:,.0f}")
-            st.write(f"**GPA:** {prof.gpa}")
-            st.write(f"**State:** {prof.state or 'Not specified'}")
-            st.write(f"**In-state only:** {'Yes' if prof.in_state_only else 'No'}")
-            st.write(f"**Public only:** {'Yes' if prof.public_only else 'No'}")
-            if st.button("🔄 Update Profile"):
-                st.info("Go to the College Finder or AI Chat page to update your profile")
-
 
 if __name__ == "__main__":
     main()

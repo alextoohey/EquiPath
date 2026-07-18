@@ -4,6 +4,7 @@ Demonstrates the relationship between income and graduation rates.
 """
 
 import streamlit as st
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -13,7 +14,7 @@ import os
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.feature_engineering import build_featured_college_df
+from src.features import build_college_features
 
 
 def main():
@@ -44,7 +45,7 @@ def main():
     # Load data
     with st.spinner("Loading college data..."):
         if 'insights_data' not in st.session_state:
-            df = build_featured_college_df()
+            df = build_college_features()
             st.session_state.insights_data = df
         else:
             df = st.session_state.insights_data
@@ -75,7 +76,7 @@ def main():
     )
 
     # Calculate average graduation rates by income category
-    grad_by_income = valid_data.groupby('Income_Category')[grad_col].mean()
+    grad_by_income = valid_data.groupby('Income_Category', observed=False)[grad_col].mean()
 
     with col1:
         highest_income_grad = grad_by_income.iloc[0] if len(grad_by_income) > 0 else 0
@@ -152,7 +153,8 @@ def main():
     low-income students increases, graduation rates tend to decrease.
     """)
 
-    # Create scatter plot
+    # Create scatter plot with a least-squares trendline (numpy, so we don't
+    # need statsmodels just for plotly's trendline="ols")
     fig2 = px.scatter(
         valid_data,
         x=pell_col,
@@ -164,9 +166,18 @@ def main():
             grad_col: '6-Year Graduation Rate (%)'
         },
         opacity=0.6,
-        trendline="ols",
         color_discrete_sequence=px.colors.qualitative.Set2
     )
+
+    slope, intercept = np.polyfit(valid_data[pell_col], valid_data[grad_col], 1)
+    x_line = np.array([valid_data[pell_col].min(), valid_data[pell_col].max()])
+    fig2.add_trace(go.Scatter(
+        x=x_line,
+        y=slope * x_line + intercept,
+        mode='lines',
+        name='Trend',
+        line=dict(color='black', width=2, dash='dash')
+    ))
 
     fig2.update_layout(
         xaxis_title="% Students Receiving Pell Grants (Higher = More Low-Income Students)",

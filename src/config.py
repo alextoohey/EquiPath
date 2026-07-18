@@ -28,14 +28,15 @@ def get_anthropic_api_key():
 
 def get_anthropic_model():
     """
-    Get Anthropic model to use.
+    Get the Claude model to use.
 
     Returns:
     --------
     str
-        Model name (defaults to claude-3-haiku-20240307)
+        Model ID (defaults to claude-haiku-4-5; override with the
+        ANTHROPIC_MODEL environment variable)
     """
-    return os.getenv('ANTHROPIC_MODEL', 'claude-3-haiku-20240307')
+    return os.getenv('ANTHROPIC_MODEL', 'claude-haiku-4-5')
 
 
 # Load on import
