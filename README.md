@@ -62,7 +62,7 @@ Two design rules kept us honest:
 git clone https://github.com/AndreJustinLee/7thDatathon.git
 cd 7thDatathon
 pip install -r requirements.txt
-streamlit run app.py
+streamlit run Home.py
 ```
 
 That's it — the datasets ship with the repo, and the first run builds a Parquet cache (~30 seconds; instant after that).
@@ -77,7 +77,7 @@ Run the tests with `pip install pytest && python -m pytest tests/`.
 
 ### Deploy your own
 
-The app runs as-is on [Streamlit Community Cloud](https://share.streamlit.io) (free): point it at this repo with `app.py` as the entrypoint, and add `ANTHROPIC_API_KEY` under app secrets if you want the AI features.
+The app runs as-is on [Streamlit Community Cloud](https://share.streamlit.io) (free): point it at this repo with `Home.py` as the entrypoint, and add `ANTHROPIC_API_KEY` under app secrets if you want the AI features.
 
 ## Data
 
@@ -92,7 +92,7 @@ The two tabular datasets are joined on UNITID (the federal institution ID) and f
 ## Architecture
 
 ```
-app.py                     Streamlit entrypoint (landing page)
+Home.py                    Streamlit entrypoint (landing page)
 pages/                     The five app pages
 src/
 ├── data_loading.py        Load + merge the datasets (Parquet-cached)
