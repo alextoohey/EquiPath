@@ -28,6 +28,7 @@ from src.profile_state import (
 )
 from src.scoring import rank_colleges_for_user, get_personalized_weights
 from src.features import build_college_features
+from src.clustering import add_clusters
 from src.llm import build_recommendation_summary, generate_explanations
 from src.config import get_anthropic_api_key, get_anthropic_model
 
@@ -191,6 +192,7 @@ def main():
                 colleges_df = build_college_features(
                     earnings_ceiling=profile.earnings_ceiling_match
                 )
+                colleges_df, _, _ = add_clusters(colleges_df, n_clusters=5)
                 recommendations = rank_colleges_for_user(colleges_df, profile, top_k=top_k)
 
                 # Store in session state so it persists across reruns
@@ -260,6 +262,9 @@ def main():
                   supporting low-income and nontraditional students.
                 - **Academic** — strength in your intended major and research intensity.
                 - **Environment** — how well size/setting match your preferences.
+                - **Archetype** (on each card) — which of five K-means clusters the school
+                  belongs to, grouping all institutions by ROI, affordability, equity, and
+                  access (e.g. *Equity Champions* = strong on all four).
                 - **Access** — your *odds of getting in*, based on the admission rate and your GPA.
                   Highly selective schools score near 0 here for everyone — a 4% admit rate is a
                   long shot even with a 4.0. That's honesty, not an error; it's also why Access
@@ -314,6 +319,12 @@ def main():
             composite = row.get('composite_score', 0)
 
             with st.expander(f"**{idx}. {inst_name}** - Match Score: {composite:.3f}", expanded=(idx <= 3)):
+                archetype = safe_get(row, 'cluster_label', None)
+                if archetype and archetype != "N/A":
+                    st.caption(f"🏷️ Archetype: **{archetype}** · one of five K-means "
+                               "clusters of all 4,900+ institutions by ROI, affordability, "
+                               "equity, and access")
+
                 # AI Summary if available
                 if inst_name in ai_summaries and ai_summaries[inst_name]:
                     st.info(f"**🤖 AI Summary:** {ai_summaries[inst_name]}")

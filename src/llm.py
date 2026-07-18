@@ -79,6 +79,7 @@ def build_recommendation_summary(profile, ranked_df, top_k=5):
             "admission_rate": float(pd.to_numeric(
                 row.get('Total Percent of Applicants Admitted', 50), errors='coerce') or 50),
             "selectivity": row.get('selectivity_bucket', 'Unknown'),
+            "archetype": row.get('cluster_label', 'Unknown'),
         }
         summary["recommendations"].append(college)
 

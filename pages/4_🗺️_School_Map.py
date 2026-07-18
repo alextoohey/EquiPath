@@ -202,6 +202,7 @@ def main():
                     'admit': 'Total Percent of Applicants Admitted',
                     'price': 'Net Price',
                     'earnings': 'Median Earnings of Students Working and Not Enrolled 10 Years After Entry',
+                    'archetype': 'cluster_label',
                 }
                 available = {k: c for k, c in cols.items() if c in full_df.columns}
                 slim = full_df[list(available.values())].copy()
@@ -219,10 +220,10 @@ def main():
     details_lookup = st.session_state.college_popup_details
 
     def popup_fields(school_name):
-        """Formatted (type, admit, price, earnings) strings for a school, '' when unknown."""
+        """Formatted (type, admit, price, earnings, archetype) strings for a school, '' when unknown."""
         d = details_lookup.get(school_name)
         if not d:
-            return '', '', '', ''
+            return '', '', '', '', ''
         sector = str(d.get('sector') or '')
         if 'Public' in sector:
             type_str = 'Public'
@@ -236,7 +237,9 @@ def main():
         admit_str = f"{admit:.1f}%" if pd.notna(admit) else ''
         price_str = f"${price:,.0f}" if pd.notna(price) else ''
         earn_str = f"${earnings:,.0f}" if pd.notna(earnings) else ''
-        return type_str, admit_str, price_str, earn_str
+        archetype = d.get('archetype')
+        arch_str = str(archetype) if archetype and pd.notna(archetype) else ''
+        return type_str, admit_str, price_str, earn_str, arch_str
 
     if show_mode == "recommended":
         # Few markers: rich pins with full popups are fine
@@ -251,7 +254,7 @@ def main():
                 continue
             lon, lat = coords[0], coords[1]
             school_name = props.get('NAME', 'Unnamed School')
-            type_str, admit_str, price_str, earn_str = popup_fields(school_name)
+            type_str, admit_str, price_str, earn_str, arch_str = popup_fields(school_name)
 
             popup_html = f"""
             <div style="font-family: Arial, sans-serif; width: 280px;">
@@ -266,6 +269,8 @@ def main():
                 popup_html += f'<p style="margin: 5px 0;"><b>Net Price:</b> {price_str}/year</p>'
             if earn_str:
                 popup_html += f'<p style="margin: 5px 0;"><b>Median Earnings (10yr):</b> {earn_str}</p>'
+            if arch_str:
+                popup_html += f'<p style="margin: 5px 0;"><b>Archetype:</b> {arch_str}</p>'
             popup_html += '<p style="margin: 8px 0 0 0; padding: 5px; background: #FFF9E6; border-left: 3px solid #FFD700;"><b>✨ Recommended for you!</b></p></div>'
 
             folium.Marker(
@@ -289,11 +294,11 @@ def main():
                     continue
                 lon, lat = coords[0], coords[1]
                 school_name = props.get('NAME', 'Unnamed School')
-                type_str, admit_str, price_str, earn_str = popup_fields(school_name)
+                type_str, admit_str, price_str, earn_str, arch_str = popup_fields(school_name)
                 rows.append([
                     lat, lon, school_name,
                     str(props.get('CITY', 'N/A')), str(props.get('STATE', 'N/A')),
-                    type_str, admit_str, price_str, earn_str,
+                    type_str, admit_str, price_str, earn_str, arch_str,
                 ])
             st.session_state[rows_key] = rows
 
@@ -313,6 +318,7 @@ def main():
                 + (row[6] ? '<p style="margin:4px 0;"><b>Admission Rate:</b> ' + esc(row[6]) + '</p>' : '')
                 + (row[7] ? '<p style="margin:4px 0;"><b>Net Price:</b> ' + esc(row[7]) + '/year</p>' : '')
                 + (row[8] ? '<p style="margin:4px 0;"><b>Median Earnings (10yr):</b> ' + esc(row[8]) + '</p>' : '')
+                + (row[9] ? '<p style="margin:4px 0;"><b>Archetype:</b> ' + esc(row[9]) + '</p>' : '')
                 + '</div>';
             marker.bindPopup(html, {maxWidth: 300});
             marker.bindTooltip(esc(row[2]));

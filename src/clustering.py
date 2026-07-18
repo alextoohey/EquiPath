@@ -38,7 +38,6 @@ def add_clusters(df, n_clusters=5, random_state=42):
     pd.DataFrame
         DataFrame with added cluster_id and cluster_label columns
     """
-    print(f"\nPerforming K-means clustering with {n_clusters} clusters...")
 
     # Select features for clustering
     feature_cols = [
@@ -74,25 +73,15 @@ def add_clusters(df, n_clusters=5, random_state=42):
         columns=feature_cols
     )
 
-    print("\n" + "="*60)
-    print("CLUSTER CENTROIDS")
-    print("="*60)
-    print(centroids.round(3))
-
     # Assign human-readable labels based on centroid characteristics
     cluster_labels = label_clusters(centroids)
 
     # Map cluster IDs to labels
     df['cluster_label'] = df['cluster_id'].map(cluster_labels)
 
-    # Print cluster distribution
-    print("\n" + "="*60)
-    print("CLUSTER DISTRIBUTION")
-    print("="*60)
-    cluster_counts = df['cluster_label'].value_counts().sort_index()
-    for label, count in cluster_counts.items():
-        pct = count / len(df) * 100
-        print(f"  {label}: {count} institutions ({pct:.1f}%)")
+    counts = df['cluster_label'].value_counts()
+    print("K-means archetypes: " + ", ".join(
+        f"{label} ({count})" for label, count in counts.items()))
 
     return df, centroids, cluster_labels
 
