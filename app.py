@@ -37,8 +37,8 @@ Our platform offers multiple tools to help you in your college search:
 - Visual comparison tools and interactive charts
 - Ask questions with our Q&A chatbot
 
-**🤖 AI Chat Assistant**
-- Build your profile through natural conversation
+**💬 Chat Assistant**
+- Build your profile through a guided chat
 - Get personalized insights and guidance
 - Voice input and output support
 
@@ -76,13 +76,13 @@ with st.sidebar:
 
     - **My Profile**: Build and edit your profile
     - **My Recommendations**: Get personalized college matches
-    - **AI Chat Assistant**: Build profile through conversation
+    - **Chat Assistant**: Build your profile through a guided chat
     - **School Map**: Explore schools geographically
     """)
 
     st.markdown("### 💡 Tips")
     st.markdown("""
-    1. Start by building your profile (**My Profile** or **AI Chat Assistant**)
+    1. Start by building your profile (**My Profile** or **Chat Assistant**)
     2. Get personalized recommendations (**My Recommendations**)
     3. Ask questions with the Q&A chatbot on the recommendations page
     4. Explore recommended schools on the **School Map**

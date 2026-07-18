@@ -2,7 +2,7 @@
 EquiPath - My Recommendations Page
 
 Comprehensive recommendations hub that works with shared profile
-(created via My Profile editor OR AI Chat Assistant).
+(created via My Profile editor OR Chat Assistant).
 
 Features:
 - Personalized college recommendations with detailed metrics
@@ -121,7 +121,7 @@ def main():
     st.markdown("""
     **Get personalized college recommendations based on your profile.**
 
-    Your profile persists across all pages - build it through the AI Chat Assistant or edit it in My Profile.
+    Your profile persists across all pages - build it through the Chat Assistant or edit it in My Profile.
     """)
 
     st.divider()
@@ -144,7 +144,7 @@ def main():
 
         **Choose one:**
         - 📝 **My Profile** - Fill out your profile manually
-        - 🤖 **AI Chat Assistant** - Build your profile through conversation
+        - 💬 **Chat Assistant** - Build your profile through conversation
         """)
 
         col1, col2 = st.columns(2)
@@ -152,8 +152,8 @@ def main():
             if st.button("📝 Go to My Profile", use_container_width=True, type="primary"):
                 st.switch_page("pages/1_✏️_My_Profile.py")
         with col2:
-            if st.button("🤖 Go to AI Chat", use_container_width=True):
-                st.switch_page("pages/3_🤖_AI_Chat_Assistant.py")
+            if st.button("💬 Go to Chat Assistant", use_container_width=True):
+                st.switch_page("pages/3_💬_Chat_Assistant.py")
         return
 
     # Main recommendation controls
@@ -531,7 +531,7 @@ def main():
     st.info("""
     💡 **Tips:**
     - Adjust your profile in **My Profile** to refine recommendations
-    - Use **AI Chat Assistant** to build your profile conversationally
+    - Use **Chat Assistant** to build your profile conversationally
     - Click **View on Map** to see where these schools are located
     - Enable **AI Summaries** in the sidebar for personalized explanations
     """)

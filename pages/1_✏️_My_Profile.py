@@ -40,7 +40,7 @@ def main():
     st.markdown("""
     **Build and edit your profile for personalized college recommendations.**
 
-    Your profile persists across all pages - edit here or build it through the AI Chat Assistant,
+    Your profile persists across all pages - edit here or build it through the Chat Assistant,
     then get recommendations on the **My Recommendations** page.
     """)
 
@@ -58,7 +58,7 @@ def main():
         st.sidebar.warning("⚠️ No profile yet")
         st.sidebar.markdown("**Get started:**")
         st.sidebar.markdown("1. Fill out the form below")
-        st.sidebar.markdown("2. Or use the AI Chat Assistant")
+        st.sidebar.markdown("2. Or use the Chat Assistant")
 
     # Reset button
     st.sidebar.divider()
@@ -71,7 +71,7 @@ def main():
     st.subheader("📝 Your Profile")
 
     if not has_minimum_profile():
-        st.info("👋 **Welcome!** Start by filling out your profile below, or go to the AI Chat Assistant for a conversational experience.")
+        st.info("👋 **Welcome!** Start by filling out your profile below, or go to the Chat Assistant for a conversational experience.")
 
     # Render the profile editor
     render_profile_editor()
@@ -91,7 +91,7 @@ def main():
     st.info("""
     💡 **Next Steps:**
     - Your profile is automatically saved and shared across all pages
-    - Build it here or conversationally using the **AI Chat Assistant**
+    - Build it here or conversationally using the **Chat Assistant**
     - Click **Get My Recommendations** to see personalized college matches
     - Visit **School Map** to explore colleges geographically
     """)

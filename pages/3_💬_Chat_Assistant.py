@@ -1,7 +1,7 @@
 """
-EquiPath - AI Chat Assistant
+EquiPath - Chat Assistant
 
-Build your profile through natural conversation with AI assistance.
+Build your profile through a guided chat, with optional voice input/output.
 Your profile is automatically saved and shared across all pages.
 """
 
@@ -19,7 +19,7 @@ def main():
     """Main page function."""
 
     st.set_page_config(
-        page_title="EquiPath - AI Chat Assistant",
+        page_title="EquiPath - Chat Assistant",
         page_icon="🤖",
         layout="wide",
     )
@@ -28,9 +28,9 @@ def main():
     initialize_shared_profile()
 
     # Title
-    st.title("🤖 AI Chat Assistant")
+    st.title("💬 Chat Assistant")
     st.markdown("""
-    **Build your profile through natural conversation with AI.**
+    **Build your profile through a guided chat — with optional voice input and output.**
 
     Your profile persists across all pages - build it here, then get recommendations
     on the **My Recommendations** page.

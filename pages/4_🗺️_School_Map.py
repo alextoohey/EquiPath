@@ -56,7 +56,7 @@ def main():
         - **Click on clusters** to zoom in and see individual schools
         - **Click on markers** to view detailed information about each school
 
-        💡 **Tip:** Build a profile on the My Profile or AI Chat Assistant page, generate recommendations, and they will appear here!
+        💡 **Tip:** Build a profile on the My Profile or Chat Assistant page, generate recommendations, and they will appear here!
         """)
 
     st.divider()

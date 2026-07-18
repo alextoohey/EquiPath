@@ -28,7 +28,7 @@ A Streamlit app with five connected pages sharing one student profile:
 | Page | What it does |
 |---|---|
 | **My Profile** | Structured form covering academics, budget, background, geography, and campus preferences |
-| **AI Chat Assistant** | Builds the same profile conversationally, with optional voice input/output |
+| **Chat Assistant** | Builds the same profile conversationally, with optional voice input/output |
 | **My Recommendations** | Ranks 4,933 institutions against your profile; Claude explains each match in plain language, and a Q&A chat answers follow-ups |
 | **School Map** | 6,812 schools on an interactive map, filterable by state or by your recommendations |
 | **Data Insights** | The income-vs-graduation-rate analysis that motivated the project |
