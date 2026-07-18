@@ -64,6 +64,7 @@ Two design rules kept us honest:
 ```bash
 git clone https://github.com/AndreJustinLee/7thDatathon.git
 cd 7thDatathon
+python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 streamlit run Home.py
 ```
