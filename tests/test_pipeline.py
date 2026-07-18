@@ -10,7 +10,7 @@ first run builds the Parquet caches (~30s); later runs take a few seconds.
 import pandas as pd
 import pytest
 
-from src.clustering import add_clusters
+from src.clustering import add_clusters, get_archetype_description
 from src.features import build_college_features
 from src.profile import UserProfile, EXAMPLE_PROFILES, normalize_state
 from src.scoring import (
@@ -184,5 +184,9 @@ def test_clustering_produces_five_labeled_archetypes(colleges):
     assert clustered['cluster_label'].notna().all()
     assert clustered['cluster_label'].nunique() == 5
     assert len(centroids) == 5
-    # Labels are human-readable archetypes, not raw cluster ids
+    # Labels are informative descriptors, not raw ids or vague fallbacks
     assert all(isinstance(v, str) and v for v in labels.values())
+    assert not any(v.startswith("Balanced Options") for v in labels.values())
+    # Every label has a user-facing description
+    for v in labels.values():
+        assert len(get_archetype_description(v)) > 20

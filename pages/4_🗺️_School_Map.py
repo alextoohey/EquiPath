@@ -17,7 +17,7 @@ import pandas as pd
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.features import build_college_features
-from src.clustering import add_clusters
+from src.clustering import add_clusters, ARCHETYPE_DESCRIPTIONS
 
 
 def main():
@@ -331,6 +331,14 @@ def main():
             name='Schools',
             control=False,
         ).add_to(m)
+
+    with st.expander("🏷️ What do the school archetypes mean?"):
+        st.markdown(
+            "Every institution is assigned one of five archetypes via K-means "
+            "clustering on four indices (ROI, affordability, equity, access). "
+            "They appear in the map popups:")
+        for name, desc in ARCHETYPE_DESCRIPTIONS.items():
+            st.markdown(f"- **{name}**: {desc}")
 
     # Display the map
     st_folium(m, width=None, height=600, use_container_width=True, returned_objects=[])
