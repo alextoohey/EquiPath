@@ -1,0 +1,2 @@
+# Notebooks are documentation/EDA, not the product; keep language stats on Python
+*.ipynb linguist-documentation
